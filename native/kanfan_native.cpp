@@ -288,6 +288,12 @@ Java_com_kanfan_player_Nat_rarList(JNIEnv* env, jclass, jstring jpath, jstring j
     memset(&hd, 0, sizeof(hd));
     int rc;
     while ((rc = RARReadHeaderEx(h, &hd)) == 0) {
+        // INCSPLIT 会把「续卷头」也返回来，这些是同一个文件的下一段，跳过，
+        // 否则一个跨 4 卷的文件会在列表里出现 4 次
+        if (hd.Flags & RHDF_SPLITBEFORE) {
+            RARProcessFile(h, RAR_SKIP, NULL, NULL);
+            continue;
+        }
         unsigned long long size = ((unsigned long long) hd.UnpSizeHigh << 32)
                                   | (unsigned long long) hd.UnpSize;
         char head[96];
