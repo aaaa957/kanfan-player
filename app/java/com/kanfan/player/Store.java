@@ -78,4 +78,13 @@ public class Store {
     public static void setReadMode(Context c, int mode) {
         sp(c).edit().putInt("r_mode", mode).apply();
     }
+
+    /** 看图方式：0 左右切换（默认）/ 1 连续下滑 */
+    public static int getImgMode(Context c) {
+        return sp(c).getInt("i_mode", 0);
+    }
+
+    public static void setImgMode(Context c, int mode) {
+        sp(c).edit().putInt("i_mode", mode).apply();
+    }
 }

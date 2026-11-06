@@ -10,14 +10,12 @@ import android.view.ScaleGestureDetector;
 import android.view.View;
 
 /**
- * 看图的画布：双击/双指缩放、放大后拖动，缩放为 1 时左右滑翻页。
+ * 单张图的画布：双击/双指缩放、放大后拖动。
+ * 左右翻页由外层的 {@link PagerLayout} 负责，这里不再判断滑动方向。
  */
 public class ZoomView extends View {
 
     public interface Listener {
-        /** direction: -1 上一张，+1 下一张 */
-        void onSwipe(int direction);
-
         void onSingleTap();
     }
 
@@ -88,6 +86,10 @@ public class ZoomView extends View {
         }
         layoutCenter();
         invalidate();
+    }
+
+    public Drawable getDrawable() {
+        return drawable;
     }
 
     public boolean hasImage() {
@@ -163,14 +165,8 @@ public class ZoomView extends View {
                     invalidate();
                 }
                 break;
-            case MotionEvent.ACTION_UP:
-                float dx = e.getX() - downX;
-                float dy = e.getY() - downY;
-                if (!multiTouch && userScale <= 1.01f
-                        && Math.abs(dx) > Ui.dp(getContext(), 56)
-                        && Math.abs(dx) > Math.abs(dy) * 1.5f) {
-                    if (listener != null) listener.onSwipe(dx < 0 ? 1 : -1);
-                }
+            case MotionEvent.ACTION_CANCEL:
+                multiTouch = false;
                 break;
             default:
                 break;
@@ -189,7 +185,7 @@ public class ZoomView extends View {
         super.onDetachedFromWindow();
     }
 
-    /** 供 Activity 判断当前是否处于放大状态 */
+    /** 供外部判断当前是否处于放大状态 */
     public boolean isZoomed() {
         return userScale > 1.01f;
     }
