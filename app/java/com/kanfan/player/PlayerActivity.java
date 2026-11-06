@@ -73,7 +73,7 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
     private String bucket = "";
     private String treeUri = "";
     private String relPath = "";
-    private List<VideoItem> playlist = new ArrayList<>();
+    private List<Entry> playlist = new ArrayList<>();
     private int index = -1;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -642,11 +642,11 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
             showHint(dir > 0 ? "已经是最后一集" : "已经是第一集");
             return;
         }
-        VideoItem v = playlist.get(ni);
+        Entry v = playlist.get(ni);
         intentTo(v);
     }
 
-    private void intentTo(VideoItem v) {
+    private void intentTo(Entry v) {
         if (danmakuView != null) danmakuView.setRunning(false);
         release();
         uri = v.uri;
@@ -827,7 +827,7 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
         new Thread(new Runnable() {
             @Override
             public void run() {
-                List<VideoItem> list = new ArrayList<>();
+                List<Entry> list = new ArrayList<>();
                 if (treeUri.length() > 0) {
                     // 手动添加的文件夹：只在这个目录里找同系列，避免跨文件夹串播
                     try {
@@ -836,19 +836,19 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
                     }
                 }
                 final String myKey = Ui.seriesKey(title);
-                List<VideoItem> sameSeries = new ArrayList<>();
-                for (VideoItem v : list) {
+                List<Entry> sameSeries = new ArrayList<>();
+                for (Entry v : list) {
                     if (Ui.seriesKey(v.title).equals(myKey)) sameSeries.add(v);
                 }
                 if (!sameSeries.isEmpty()) list = sameSeries;
 
-                Collections.sort(list, new java.util.Comparator<VideoItem>() {
+                Collections.sort(list, new java.util.Comparator<Entry>() {
                     @Override
-                    public int compare(VideoItem a, VideoItem b) {
+                    public int compare(Entry a, Entry b) {
                         return Ui.NATURAL.compare(a.title, b.title);
                     }
                 });
-                final List<VideoItem> fl = list;
+                final List<Entry> fl = list;
                 ui.post(new Runnable() {
                     @Override
                     public void run() {

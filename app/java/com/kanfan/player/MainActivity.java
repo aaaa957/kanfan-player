@@ -49,7 +49,7 @@ public class MainActivity extends Activity {
     private static final String PREF = "kanfan_folders";
     private static final String KEY_TREES = "trees";
 
-    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2;
+    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3;
 
     private ListView list;
     private TextView subtitle, manageBtn, addBtn, titleView;
@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private LinearLayout root;
 
     private final List<Row> rows = new ArrayList<>();
-    private final List<VideoItem> all = new ArrayList<>();
+    private final List<Entry> all = new ArrayList<>();
     private final List<String[]> folders = new ArrayList<>(); // {uri, name}
     private final List<Crumb> stack = new ArrayList<>();      // 导航栈，空 = 根层级
     private Adapter adapter;
@@ -90,7 +90,7 @@ public class MainActivity extends Activity {
         String sub;     // 文件夹副标题
         String tree;
         String rel;
-        VideoItem item;
+        Entry item;
     }
 
     @Override
@@ -299,6 +299,8 @@ public class MainActivity extends Activity {
                     list.setSelection(0);
                 } else if (r.type == T_VIDEO && r.item != null) {
                     open(r.item);
+                } else if (r.type == T_BOOK && r.item != null) {
+                    read(r.item);
                 }
             }
         });
@@ -356,7 +358,7 @@ public class MainActivity extends Activity {
         pool.execute(new Runnable() {
             @Override
             public void run() {
-                final List<VideoItem> found = new ArrayList<>();
+                final List<Entry> found = new ArrayList<>();
                 for (String[] f : snapshot) {
                     try {
                         found.addAll(Scan.scanTree(MainActivity.this, Uri.parse(f[0])));
@@ -393,14 +395,14 @@ public class MainActivity extends Activity {
 
     private void measureDurations() {
         if (all.isEmpty()) return;
-        final List<VideoItem> snapshot = new ArrayList<>(all);
+        final List<Entry> snapshot = new ArrayList<>(all);
         final AtomicInteger done = new AtomicInteger(0);
         final int total = snapshot.size();
-        for (final VideoItem v : snapshot) {
+        for (final Entry v : snapshot) {
             pool.execute(new Runnable() {
                 @Override
                 public void run() {
-                    if (v.duration <= 0) {
+                    if (!v.isBook() && v.duration <= 0) {
                         v.duration = Scan.durationOf(MainActivity.this, v.uri);
                     }
                     if (done.incrementAndGet() >= total) {
@@ -433,40 +435,54 @@ public class MainActivity extends Activity {
 
     private void buildRootRows() {
         for (String[] f : folders) {
-            int count = 0;
+            int videos = 0, books = 0;
             long size = 0;
-            for (VideoItem v : all) {
-                if (f[0].equals(v.tree)) {
-                    count++;
-                    size += v.size;
-                }
+            for (Entry v : all) {
+                if (!f[0].equals(v.tree)) continue;
+                if (v.isBook()) books++;
+                else videos++;
+                size += v.size;
             }
             Row r = new Row();
             r.type = T_DIR;
             r.label = f[1];
             r.tree = f[0];
             r.rel = "";
-            r.sub = count == 0 ? "空文件夹"
-                    : String.format(Locale.US, "%d 个视频 · %s", count, sizeText(size));
+            r.sub = subText(videos, books, size);
             rows.add(r);
         }
+    }
+
+    /** 「52 个视频 · 3 本 · 13.4 GB」这样的副标题 */
+    private String subText(int videos, int books, long size) {
+        StringBuilder sb = new StringBuilder();
+        if (videos > 0) sb.append(videos).append(" 个视频");
+        if (books > 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(books).append(" 本");
+        }
+        if (sb.length() == 0) return "空文件夹";
+        return sb.append(" · ").append(sizeText(size)).toString();
     }
 
     private void buildDirRows() {
         Crumb cur = stack.get(stack.size() - 1);
 
-        List<VideoItem> scoped = new ArrayList<>();
-        for (VideoItem v : all) {
+        List<Entry> scoped = new ArrayList<>();
+        for (Entry v : all) {
             if (cur.tree.equals(v.tree)) scoped.add(v);
         }
         String[] rels = new String[scoped.size()];
         long[] sizes = new long[scoped.size()];
+        int[] kinds = new int[scoped.size()];
         for (int i = 0; i < scoped.size(); i++) {
-            rels[i] = scoped.get(i).relPath;
-            sizes[i] = scoped.get(i).size;
+            Entry e = scoped.get(i);
+            rels[i] = e.relPath;
+            sizes[i] = e.size;
+            kinds[i] = e.kind;
         }
 
-        List<Nav.Dir> dirs = Nav.subdirsOf(cur.rel, rels, sizes);
+        List<Nav.Dir> dirs = Nav.subdirsOf(cur.rel, rels, sizes, kinds);
         Collections.sort(dirs, new java.util.Comparator<Nav.Dir>() {
             @Override
             public int compare(Nav.Dir a, Nav.Dir b) {
@@ -485,28 +501,49 @@ public class MainActivity extends Activity {
                 r.label = d.name;
                 r.tree = cur.tree;
                 r.rel = d.rel;
-                r.sub = String.format(Locale.US, "%d 个视频 · %s", d.count, sizeText(d.size));
+                r.sub = subText(d.videoCount, d.bookCount, d.size);
                 rows.add(r);
             }
         }
 
-        List<VideoItem> videos = new ArrayList<>();
-        for (int idx : Nav.directOf(cur.rel, rels)) videos.add(scoped.get(idx));
-        Collections.sort(videos, new java.util.Comparator<VideoItem>() {
+        List<Entry> videos = new ArrayList<>();
+        List<Entry> books = new ArrayList<>();
+        for (int idx : Nav.directOf(cur.rel, rels)) {
+            Entry e = scoped.get(idx);
+            if (e.isBook()) books.add(e);
+            else videos.add(e);
+        }
+        java.util.Comparator<Entry> byTitle = new java.util.Comparator<Entry>() {
             @Override
-            public int compare(VideoItem a, VideoItem b) {
+            public int compare(Entry a, Entry b) {
                 return Ui.NATURAL.compare(a.title, b.title);
             }
-        });
+        };
+        Collections.sort(videos, byTitle);
+        Collections.sort(books, byTitle);
+
         if (!videos.isEmpty()) {
             Row h = new Row();
             h.type = T_HEADER;
             h.label = "视频";
             rows.add(h);
-            for (VideoItem v : videos) {
+            for (Entry v : videos) {
                 Row r = new Row();
                 r.type = T_VIDEO;
                 r.item = v;
+                rows.add(r);
+            }
+        }
+
+        if (!books.isEmpty()) {
+            Row h = new Row();
+            h.type = T_HEADER;
+            h.label = "书籍";
+            rows.add(h);
+            for (Entry b : books) {
+                Row r = new Row();
+                r.type = T_BOOK;
+                r.item = b;
                 rows.add(r);
             }
         }
@@ -521,9 +558,9 @@ public class MainActivity extends Activity {
         if (folders.isEmpty()) {
             empty.setText("还没有添加文件夹\n\n点右上角「＋ 添加」，选中存放视频的文件夹（比如 Movies）\n之后这个应用就只看那里，不会再扫相册和截图");
         } else if (stack.isEmpty()) {
-            empty.setText("添加的文件夹里没找到视频\n\n支持 mp4 / mkv / avi / ts / mov 等常见格式");
+            empty.setText("添加的文件夹里没找到视频或书籍\n\n视频支持 mp4 / mkv / avi / ts / mov，书籍支持 txt / epub");
         } else {
-            empty.setText("这个文件夹里没有视频\n\n点左上角箭头返回上一级");
+            empty.setText("这个文件夹里没有视频或书籍\n\n点左上角箭头返回上一级");
         }
     }
 
@@ -531,25 +568,32 @@ public class MainActivity extends Activity {
     private void updateHeader() {
         refreshHeaderState();
         long size = 0;
-        int count = 0;
+        int videos = 0, books = 0;
         if (stack.isEmpty()) {
             titleView.setText("看番");
-            for (VideoItem v : all) size += v.size;
-            count = all.size();
+            for (Entry v : all) {
+                size += v.size;
+                if (v.isBook()) books++;
+                else videos++;
+            }
             if (folders.isEmpty()) subtitle.setText("还没有添加文件夹");
-            else subtitle.setText(String.format(Locale.US, "%d 个文件夹 · %d 个视频 · %s",
-                    folders.size(), count, sizeText(size)));
+            else {
+                String cnt = subText(videos, books, size);
+                subtitle.setText(String.format(Locale.US, "%d 个文件夹 · %s",
+                        folders.size(), cnt));
+            }
             return;
         }
         Crumb cur = stack.get(stack.size() - 1);
         titleView.setText(cur.name);
-        for (VideoItem v : all) {
+        for (Entry v : all) {
             if (cur.tree.equals(v.tree) && Nav.under(v.relPath, cur.rel)) {
-                count++;
+                if (v.isBook()) books++;
+                else videos++;
                 size += v.size;
             }
         }
-        subtitle.setText(String.format(Locale.US, "%d 个视频 · %s", count, sizeText(size)));
+        subtitle.setText(subText(videos, books, size));
     }
 
     private void goUp() {
@@ -574,7 +618,7 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "再按一次退出", Toast.LENGTH_SHORT).show();
     }
 
-    private void open(VideoItem v) {
+    private void open(Entry v) {
         Intent it = new Intent(this, PlayerActivity.class);
         it.putExtra("uri", v.uri.toString());
         it.putExtra("title", v.title);
@@ -582,6 +626,13 @@ public class MainActivity extends Activity {
         it.putExtra("bucket", v.bucket);
         it.putExtra("tree", v.tree);
         it.putExtra("rel", v.relPath);
+        startActivity(it);
+    }
+
+    private void read(Entry v) {
+        Intent it = new Intent(this, ReaderActivity.class);
+        it.putExtra("uri", v.uri.toString());
+        it.putExtra("name", v.name);
         startActivity(it);
     }
 
@@ -605,7 +656,7 @@ public class MainActivity extends Activity {
 
         @Override
         public int getViewTypeCount() {
-            return 3;
+            return 4;
         }
 
         @Override
@@ -623,8 +674,60 @@ public class MainActivity extends Activity {
             Row r = rows.get(position);
             if (r.type == T_HEADER) return headerView(r);
             if (r.type == T_DIR) return dirView(r);
+            if (r.type == T_BOOK) return bookView(r.item);
             return itemView(r.item);
         }
+    }
+
+    /** 书籍行：书本图标 + 书名 + 格式与体积（有阅读记录就标出来） */
+    private View bookView(final Entry v) {
+        int pad = Ui.dp(this, 5);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(0, 0, 0, pad);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(Ui.dp(this, 12), Ui.dp(this, 11), Ui.dp(this, 12), Ui.dp(this, 11));
+        card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        FrameLayout iconBox = new FrameLayout(this);
+        iconBox.setBackground(Ui.round(this, Ui.alpha(getColor(R.color.accent), 0.13f), 12f));
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(R.drawable.ic_book);
+        ic.setColorFilter(getColor(R.color.accent));
+        int is = Ui.dp(this, 22);
+        iconBox.addView(ic, new FrameLayout.LayoutParams(is, is, Gravity.CENTER));
+        card.addView(iconBox, new LinearLayout.LayoutParams(Ui.dp(this, 46), Ui.dp(this, 46)));
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        colLp.setMargins(Ui.dp(this, 12), 0, 0, 0);
+        card.addView(col, colLp);
+
+        TextView name = new TextView(this);
+        name.setText(v.title);
+        name.setTextColor(getColor(R.color.text));
+        name.setTextSize(15f);
+        name.setMaxLines(2);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        col.addView(name);
+
+        String ext = v.name.toLowerCase(Locale.US).endsWith(".epub") ? "EPUB" : "TXT";
+        int[] pos = Store.getBookPos(this, v.key());
+        String read = pos == null ? "" : String.format(Locale.US, " · 上次读到第 %d 章", pos[0] + 1);
+        TextView meta = new TextView(this);
+        meta.setText(ext + " · " + Ui.fmtSize(v.size) + read);
+        meta.setTextColor(getColor(R.color.dim));
+        meta.setTextSize(11.5f);
+        meta.setPadding(0, Ui.dp(this, 4), 0, 0);
+        col.addView(meta);
+
+        wrap.addView(card, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return wrap;
     }
 
     private View headerView(Row r) {
@@ -702,7 +805,7 @@ public class MainActivity extends Activity {
         return wrap;
     }
 
-    private View itemView(final VideoItem v) {
+    private View itemView(final Entry v) {
         int pad = Ui.dp(this, 5);
         FrameLayout wrap = new FrameLayout(this);
         wrap.setPadding(0, 0, 0, pad);
@@ -789,7 +892,7 @@ public class MainActivity extends Activity {
         return wrap;
     }
 
-    private void loadThumb(final VideoItem v, final ImageView target) {
+    private void loadThumb(final Entry v, final ImageView target) {
         target.setTag(v.key());
         final int tw = Ui.dp(this, 108), th = Ui.dp(this, 61);
         pool.execute(new Runnable() {

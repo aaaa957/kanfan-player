@@ -4,11 +4,11 @@
 
 # 看番 · KanFan
 
-**一个 70 KB 的安卓本地视频播放器**
+**一个 82 KB 的安卓本地视频播放器 · 顺手能看书的阅读器**
 
 纯 Java + 系统原生 API · 零第三方依赖 · 无广告 · 无会员 · 不联网
 
-`Min SDK 23 (Android 6.0)` · `Target SDK 34` · `APK 70 KB`
+`Min SDK 23 (Android 6.0)` · `Target SDK 34` · `APK 82 KB`
 
 </div>
 
@@ -24,6 +24,7 @@
 | **倍速** | 0.5 / 0.75 / 1.0 / 1.25 / 1.5 / 2.0 六档，一键循环切换 |
 | **外挂字幕** | 自动加载视频同名的 `.srt` / `.ass` / `.ssa` / `.vtt`，也可从任意位置手选；UTF-8 与 GBK 都能识别 |
 | **外挂弹幕** | 自动加载同名 B 站 `.xml` 弹幕；`弹幕` 按钮里可换文件或手选 `.xml` / `.ass`（弹弹play 导出） |
+| **阅读** | 点文件夹里的 `.txt` / `.epub` 直接进阅读器：章节识别、目录跳转、字号与三种背景、阅读进度记忆；EPUB 的插图随文显示 |
 | **画面** | 沉浸式全屏（隐藏状态栏 + 导航栏）、横屏、按原始比例居中不拉伸、播放时屏幕常亮 |
 | **其它** | 锁定防误触；控制条 3.5 秒自动隐藏 |
 
@@ -66,6 +67,37 @@
 
 字幕文件按 UTF-8 严格解码，失败自动退回 GBK —— 中文字幕大多是这两种。
 
+### 阅读器（TXT / EPUB）
+
+片库本身就是文件夹浏览器，所以点 `.txt` / `.epub` 和点视频一样：**手动点进去，只是打开的是阅读器**。
+
+```
+我的小说/
+├─ 三体.txt          ← 点它进阅读器
+└─ 轻小说/
+   └─ 某轻小说.epub   ← 点它也进阅读器，插图随文显示
+```
+
+**TXT**
+
+- 章节识别：`第X章 / 节 / 回 / 卷 / 篇`、`Chapter 12`、`12、标题`、`序章 / 楔子 / 番外 / 终章`
+- 认不出章节就按 3000 字左右切块，不会一口气把整本书塞进一个视图
+- 编码：UTF-8 严格解码，失败自动退回 GBK
+
+**EPUB**
+
+- 走标准 `container.xml → OPF → spine`，按书里的顺序逐章读取
+- 目录优先 `toc.ncx`（EPUB2），其次 `nav.xhtml`（EPUB3），都没有就用每页 `<title>`
+- 插图从 zip 里就地解码，按屏宽等比缩放后插入正文
+- **不解析 CSS**：字体、缩进、复杂版式都不还原，只保留段落、标题、粗斜体、图片、列表
+
+**阅读体验**
+
+- 点正文显隐上下栏，滑动不受影响
+- 字号 13–30 可调；背景深色 / 米黄 / 浅色；设置全局记忆
+- 底部常驻「第 x / y 章 · 42%」，上一章 / 下一章一键切换
+- 切后台或退出会记住「第几章 + 章内位置」，下次直接从那里继续
+
 ### 隐私
 
 `AndroidManifest.xml` 里只有一条权限：
@@ -85,17 +117,20 @@
 | 文件 | 行数 | 职责 |
 |---|---:|---|
 | `PlayerActivity.java` | 1289 | 播放器本体：MediaPlayer + SurfaceView、手势分发、连播、进度记忆、控制条、外挂字幕/弹幕接线 |
-| `MainActivity.java` | 853 | 片库：目录授权、分层浏览（文件夹 / 子文件夹 / 视频）、缩略图异步加载 |
-| `Scan.java` | 318 | SAF 目录遍历：带相对路径的视频列表、同目录文件枚举、文本读取（UTF-8/GBK） |
+| `MainActivity.java` | 956 | 片库：目录授权、分层浏览（文件夹 / 视频 / 书籍）、缩略图异步加载 |
+| `ReaderActivity.java` | 678 | 阅读器：TXT 整章渲染、EPUB 逐章渲染（插图来自 zip）、字号/背景/进度 |
+| `Scan.java` | 330 | SAF 目录遍历：视频与书籍列表、同目录文件枚举、文本读取（UTF-8/GBK） |
+| `Epub.java` | 310 | EPUB 解析：container → OPF → spine / 目录 / 插图，纯 Java |
 | `Sub.java` | 206 | 字幕解析：SRT / VTT / ASS，纯 Java |
 | `DanmakuView.java` | 194 | 弹幕渲染：按帧重绘、轨道分配、描边文字 |
 | `Danmaku.java` | 171 | 弹幕解析：B站 XML / ASS，纯 Java |
 | `Ui.java` | 125 | dp 换算、圆角/圆形背景、时长格式化、标题清洗、自然排序 |
-| `Nav.java` | 79 | 纯逻辑：把一堆相对路径折叠成某一层的子目录与直属视频 |
-| `Store.java` | 31 | SharedPreferences：播放位置、已添加目录 |
-| `VideoItem.java` | 22 | 数据模型（含 `relPath` 与所属 `tree`） |
+| `Split.java` | 101 | TXT 章节切分（`第X章` / `Chapter N` / 按字数兜底），纯 Java |
+| `Nav.java` | 89 | 纯逻辑：把一堆相对路径折叠成某一层的子目录与直属内容 |
+| `Store.java` | 72 | SharedPreferences：播放位置、阅读进度、字号与背景、已添加目录 |
+| `Entry.java` | 32 | 数据模型：视频或书籍（`kind` + `relPath` + 所属 `tree`） |
 
-**为什么不用 ExoPlayer**：本地播放只需要 H.264/H.265 + AAC，系统 `MediaPlayer` 完全够用。放弃 ExoPlayer 换来的是 APK 从「十几 MB」降到 **70 KB**，启动零依赖加载。
+**为什么不用 ExoPlayer**：本地播放只需要 H.264/H.265 + AAC，系统 `MediaPlayer` 完全够用。放弃 ExoPlayer 换来的是 APK 从「十几 MB」降到 **82 KB**，启动零依赖加载。
 
 ---
 
@@ -158,20 +193,26 @@ javac -d out/tests \
   app/java/com/kanfan/player/Nav.java \
   app/java/com/kanfan/player/Sub.java \
   app/java/com/kanfan/player/Danmaku.java \
+  app/java/com/kanfan/player/Split.java \
+  app/java/com/kanfan/player/Epub.java \
   tests/*.java
 
 java -cp out/tests NavTest      # 目录折叠
 java -cp out/tests SubTest      # 字幕解析
 java -cp out/tests DanmakuTest  # 弹幕解析
+java -cp out/tests SplitTest    # TXT 章节切分
+java -cp out/tests EpubTest     # EPUB 解析（测试里现场打包一个 epub）
 ```
 
-**79 项用例**，目前全部通过：
+**127 项用例**，目前全部通过：
 
 | 用例 | 数量 | 重点覆盖 |
 |---|---:|---|
-| `NavTest` | 23 | 多层嵌套、空输入、以及最容易踩的**前缀陷阱**（`AB` 不属于 `A`） |
+| `NavTest` | 29 | 多层嵌套、空输入、**前缀陷阱**（`AB` 不属于 `A`）、视频与书籍分开计数 |
 | `SubTest` | 34 | SRT/VTT/ASS 三种时间轴（含 ASS 百分秒）、`\N` 与标签剥离、乱序 `Format`、时间重叠取新句、区间边界 |
 | `DanmakuTest` | 22 | B站 XML 的三种模式与十进制颜色、HTML 实体、ASS 的 `\c&HBBGGRR&`、排序与坏行跳过 |
+| `SplitTest` | 22 | 中英文标题、首章前的序言、正文行不被误判为章节、无章节时按长度切块 |
+| `EpubTest` | 20 | container/OPF/spine、NCX 与 nav 两种目录、`../` 路径归一、图片字节、script/style 剔除 |
 
 > UI 与播放链路仍没有自动化测试 —— 这台开发机上没有安卓设备也没有模拟器，只能装机手测。
 
@@ -223,6 +264,8 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - 依赖系统解码器：H.264 / H.265 + AAC 没问题；AC3 / DTS 等非常规音轨可能无声
 - ASS 字幕只取「时间 + 文本」，复杂特效（字体定位、卡拉OK、绘图）会退化成普通居中文本
 - 弹幕不支持代码弹幕 / BAS 等高级类型；ASS 弹幕统一按滚动处理，不还原位置与动画
+- 阅读器**不解析 EPUB 的 CSS**：字体、缩进、图文混排等版式不还原，只保留段落 / 标题 / 粗斜体 / 图片
+- 阅读器是滚动式，不是翻页式；没有书签与标注
 - 倍速在退出播放器后回到 1.0×，不做跨会话记忆
 - 没有接入 MediaSession，锁屏与通知栏无控制，也没有画中画
 - 只在个人的几台设备上手动验证过，UI 与播放链路没有自动化测试（解析逻辑有）

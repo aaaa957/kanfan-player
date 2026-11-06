@@ -53,6 +53,20 @@ public class NavTest {
         check("下钻/直属数", Nav.directOf("A/B", deep).length, 1);
         check("下钻/再往下的直属数", Nav.directOf("A/B/C", deep).length, 1);
 
+        // 7) 视频与书籍分开计数
+        String[] mixed = {"", "A", "A"};
+        long[] mixedSize = {10, 20, 30};
+        int[] mixedKind = {0, 0, 1};
+        List<Nav.Dir> d4 = Nav.subdirsOf("", mixed, mixedSize, mixedKind);
+        check("分类/A 总数", d4.get(0).count, 2);
+        check("分类/A 视频数", d4.get(0).videoCount, 1);
+        check("分类/A 书籍数", d4.get(0).bookCount, 1);
+        check("分类/A 体积", (int) d4.get(0).size, 50);
+
+        List<Nav.Dir> d5 = Nav.subdirsOf("", mixed, mixedSize);
+        check("不传 kinds/视频数", d5.get(0).videoCount, 2);
+        check("不传 kinds/书籍数", d5.get(0).bookCount, 0);
+
         // 6) 空输入不炸
         check("空输入/子目录", Nav.subdirsOf("", new String[0], new long[0]).size(), 0);
         check("空输入/直属", Nav.directOf("", null).length, 0);

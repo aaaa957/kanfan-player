@@ -16,6 +16,8 @@ public final class Nav {
         public final String rel;
         public int count;
         public long size;
+        public int videoCount;
+        public int bookCount;
 
         Dir(String name, String rel) {
             this.name = name;
@@ -44,6 +46,11 @@ public final class Nav {
 
     /** 直属子目录（按出现顺序，调用方自行排序） */
     public static List<Dir> subdirsOf(String base, String[] rels, long[] sizes) {
+        return subdirsOf(base, rels, sizes, null);
+    }
+
+    /** kinds 为 null 时全部按「视频」计数；kind: 0=视频，1=书籍 */
+    public static List<Dir> subdirsOf(String base, String[] rels, long[] sizes, int[] kinds) {
         Map<String, Dir> map = new LinkedHashMap<String, Dir>();
         if (rels == null) return new ArrayList<Dir>();
         for (int i = 0; i < rels.length; i++) {
@@ -58,8 +65,11 @@ public final class Nav {
                 d = new Dir(rest, (base == null || base.isEmpty()) ? rest : base + "/" + rest);
                 map.put(rest, d);
             }
+            long sz = (sizes != null && i < sizes.length) ? sizes[i] : 0;
             d.count++;
-            d.size += (sizes != null && i < sizes.length) ? sizes[i] : 0;
+            d.size += sz;
+            if (kinds != null && i < kinds.length && kinds[i] == 1) d.bookCount++;
+            else d.videoCount++;
         }
         return new ArrayList<Dir>(map.values());
     }

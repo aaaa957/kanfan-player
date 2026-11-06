@@ -33,11 +33,22 @@ public class Scan {
             ".flv", ".m4v", ".wmv", ".rmvb", ".mpg", ".mpeg", ".3gp"
     };
 
+    private static final String[] BOOK_EXT = {".txt", ".epub"};
+
     public static boolean isVideo(String name, String mime) {
         if (mime != null && mime.toLowerCase(Locale.US).startsWith("video/")) return true;
         if (name == null) return false;
         String n = name.toLowerCase(Locale.US);
         for (String e : VIDEO_EXT) {
+            if (n.endsWith(e)) return true;
+        }
+        return false;
+    }
+
+    public static boolean isBook(String name) {
+        if (name == null) return false;
+        String n = name.toLowerCase(Locale.US);
+        for (String e : BOOK_EXT) {
             if (n.endsWith(e)) return true;
         }
         return false;
@@ -64,8 +75,8 @@ public class Scan {
     }
 
     /** 递归扫描整棵树，每个条目都带上相对路径（relPath）与所属根（tree） */
-    public static List<VideoItem> scanTree(Context c, Uri tree) {
-        List<VideoItem> out = new ArrayList<>();
+    public static List<Entry> scanTree(Context c, Uri tree) {
+        List<Entry> out = new ArrayList<>();
         String root = treeName(c, tree);
         try {
             walk(c, tree, DocumentId(tree), root, "", out, 0);
@@ -90,7 +101,7 @@ public class Scan {
     }
 
     private static void walk(Context c, Uri tree, String docId, String rootName, String rel,
-                             List<VideoItem> out, int depth) {
+                             List<Entry> out, int depth) {
         if (docId == null || depth > 8) return;
         Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
         Cursor cur = null;
@@ -106,8 +117,9 @@ public class Scan {
                 long size = cur.isNull(iSize) ? 0 : cur.getLong(iSize);
                 if (DIR_MIME.equals(mime)) {
                     dirs.add(new String[]{id, name});
-                } else if (isVideo(name, mime)) {
-                    VideoItem v = new VideoItem();
+                } else if (isVideo(name, mime) || isBook(name)) {
+                    Entry v = new Entry();
+                    v.kind = isVideo(name, mime) ? Entry.VIDEO : Entry.BOOK;
                     v.name = name == null ? "" : name;
                     v.title = Ui.prettyTitle(v.name);
                     v.relPath = rel;
@@ -131,8 +143,8 @@ public class Scan {
     }
 
     /** 只取某个目录（直属）里的视频，用于播放器的连播列表。relPath 为 "" 表示根目录 */
-    public static List<VideoItem> childrenOf(Context c, Uri tree, String relPath) {
-        List<VideoItem> out = new ArrayList<>();
+    public static List<Entry> childrenOf(Context c, Uri tree, String relPath) {
+        List<Entry> out = new ArrayList<>();
         try {
             String docId = resolve(c, tree, relPath);
             if (docId == null) return out;
@@ -151,7 +163,7 @@ public class Scan {
                     long size = cur.isNull(3) ? 0 : cur.getLong(3);
                     if (DIR_MIME.equals(mime)) continue;
                     if (!isVideo(name, mime)) continue;
-                    VideoItem v = new VideoItem();
+                    Entry v = new Entry();
                     v.name = name == null ? "" : name;
                     v.title = Ui.prettyTitle(v.name);
                     v.relPath = rel;

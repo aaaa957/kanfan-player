@@ -2,8 +2,14 @@ package com.kanfan.player;
 
 import android.net.Uri;
 
-public class VideoItem {
+/** 片库里的一条内容：视频或书籍（txt / epub） */
+public class Entry {
+
+    public static final int VIDEO = 0;
+    public static final int BOOK = 1;
+
     public long id;
+    public int kind = VIDEO;
     public String name = "";
     public String title = "";
     /** 直属文件夹的显示名（根目录下的文件则为根目录名） */
@@ -18,5 +24,9 @@ public class VideoItem {
 
     public String key() {
         return uri == null ? "" : uri.toString();
+    }
+
+    public boolean isBook() {
+        return kind == BOOK;
     }
 }
