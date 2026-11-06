@@ -70,9 +70,9 @@ public class Store {
         sp(c).edit().putInt("r_theme", theme).apply();
     }
 
-    /** 阅读方式：0 分页 / 1 连续滚动 */
+    /** 阅读方式：0 分页 / 1 连续滚动（默认滚动） */
     public static int getReadMode(Context c) {
-        return sp(c).getInt("r_mode", 0);
+        return sp(c).getInt("r_mode", 1);
     }
 
     public static void setReadMode(Context c, int mode) {

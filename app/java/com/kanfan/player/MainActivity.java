@@ -15,6 +15,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.LruCache;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
@@ -47,22 +48,30 @@ public class MainActivity extends Activity {
 
     private static final int REQ_TREE = 2001;
     private static final String PREF = "kanfan_folders";
-    private static final String KEY_TREES = "trees";
+    private static final String KEY_TREES = "trees";        // 旧格式：StringSet（无序）
+    private static final String KEY_ORDER = "trees_order";  // 新格式：按行存储，保留顺序
 
     private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3;
 
     private ListView list;
     private TextView subtitle, manageBtn, addBtn, titleView;
+    private TextView allBtn, delBtn, doneBtn;
+    private LinearLayout manageBar;
     private ImageView backBtn;
     private TextView empty;
     private LinearLayout root;
 
     private final List<Row> rows = new ArrayList<>();
     private final List<Entry> all = new ArrayList<>();
-    private final List<String[]> folders = new ArrayList<>(); // {uri, name}
+    private final List<String[]> folders = new ArrayList<>(); // {uri, name}，顺序即展示顺序
     private final List<Crumb> stack = new ArrayList<>();      // 导航栈，空 = 根层级
     private Adapter adapter;
     private long lastBack;
+
+    // 管理（多选删除 / 拖动排序）
+    private boolean manageMode;
+    private final java.util.Set<String> selected = new java.util.LinkedHashSet<>();
+    private int dragPos = -1;
 
     private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -90,6 +99,8 @@ public class MainActivity extends Activity {
         String sub;     // 文件夹副标题
         String tree;
         String rel;
+        int index;      // 根层级时的文件夹下标
+        boolean checked;
         Entry item;
     }
 
@@ -115,20 +126,36 @@ public class MainActivity extends Activity {
 
     private void loadFolders() {
         folders.clear();
-        try {
-            for (String s : sp().getStringSet(KEY_TREES, new java.util.LinkedHashSet<String>())) {
-                int p = s.indexOf("||");
-                if (p <= 0) continue;
-                folders.add(new String[]{s.substring(0, p), s.substring(p + 2)});
+        String raw = sp().getString(KEY_ORDER, null);
+        if (raw == null) {
+            // 从旧的无序 StringSet 迁移一次
+            StringBuilder sb = new StringBuilder();
+            try {
+                for (String s : sp().getStringSet(KEY_TREES, new java.util.LinkedHashSet<String>())) {
+                    if (s.indexOf("||") <= 0) continue;
+                    if (sb.length() > 0) sb.append('\n');
+                    sb.append(s);
+                }
+            } catch (Exception ignored) {
             }
-        } catch (Exception ignored) {
+            raw = sb.toString();
+            sp().edit().putString(KEY_ORDER, raw).apply();
+        }
+        for (String line : raw.split("\n")) {
+            int p = line.indexOf("||");
+            if (p <= 0) continue;
+            folders.add(new String[]{line.substring(0, p), line.substring(p + 2)});
         }
     }
 
+    /** 按当前顺序整表写回，保证拖动排序能持久化 */
     private void saveFolders() {
-        java.util.LinkedHashSet<String> set = new java.util.LinkedHashSet<>();
-        for (String[] f : folders) set.add(f[0] + "||" + f[1]);
-        sp().edit().putStringSet(KEY_TREES, set).apply();
+        StringBuilder sb = new StringBuilder();
+        for (String[] f : folders) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(f[0]).append("||").append(f[1].replace('\n', ' '));
+        }
+        sp().edit().putString(KEY_ORDER, sb.toString()).apply();
     }
 
     private void pickFolder() {
@@ -167,40 +194,72 @@ public class MainActivity extends Activity {
         rescan();
     }
 
-    private void showManage() {
+    /** 进入管理：每行左侧出现圆圈，可多选删除、长按拖动排序 */
+    private void enterManage() {
         if (folders.isEmpty()) {
             Toast.makeText(this, "还没有添加文件夹", Toast.LENGTH_SHORT).show();
             return;
         }
-        final String[] names = new String[folders.size()];
-        for (int i = 0; i < folders.size(); i++) names[i] = folders.get(i)[1];
+        while (!stack.isEmpty()) stack.remove(stack.size() - 1);
+        manageMode = true;
+        selected.clear();
+        dragPos = -1;
+        rebuildRows();
+        Toast.makeText(this, "点圆圈选择，长按可拖动排序", Toast.LENGTH_SHORT).show();
+    }
+
+    private void exitManage() {
+        manageMode = false;
+        selected.clear();
+        dragPos = -1;
+        rebuildRows();
+    }
+
+    private void toggleSelect(int index) {
+        if (index < 0 || index >= folders.size()) return;
+        String uri = folders.get(index)[0];
+        if (!selected.remove(uri)) selected.add(uri);
+        rebuildRows();
+    }
+
+    private void toggleSelectAll() {
+        if (selected.size() >= folders.size()) {
+            selected.clear();
+        } else {
+            for (String[] f : folders) selected.add(f[0]);
+        }
+        rebuildRows();
+    }
+
+    private void deleteSelected() {
+        if (selected.isEmpty()) {
+            Toast.makeText(this, "先点圆圈选中要移除的文件夹", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final int n = selected.size();
         new AlertDialog.Builder(this)
-                .setTitle("已添加的文件夹（点选可移除）")
-                .setItems(names, new android.content.DialogInterface.OnClickListener() {
+                .setMessage("从应用里移除选中的 " + n + " 个文件夹？\n\n只是不再显示，手机上的文件不会被删除。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("移除", new android.content.DialogInterface.OnClickListener() {
                     @Override
-                    public void onClick(android.content.DialogInterface d, int which) {
-                        final int idx = which;
-                        new AlertDialog.Builder(MainActivity.this)
-                                .setMessage("移除「" + names[idx] + "」？\n只是不再显示，不会删除手机上的文件。")
-                                .setNegativeButton("取消", null)
-                                .setPositiveButton("移除", new android.content.DialogInterface.OnClickListener() {
-                                    @Override
-                                    public void onClick(android.content.DialogInterface d2, int w2) {
-                                        try {
-                                            getContentResolver().releasePersistableUriPermission(
-                                                    Uri.parse(folders.get(idx)[0]),
-                                                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                                        } catch (Exception ignored) {
-                                        }
-                                        folders.remove(idx);
-                                        saveFolders();
-                                        stack.clear();
-                                        rescan();
-                                    }
-                                }).show();
+                    public void onClick(android.content.DialogInterface d, int w) {
+                        for (int i = folders.size() - 1; i >= 0; i--) {
+                            String uri = folders.get(i)[0];
+                            if (!selected.contains(uri)) continue;
+                            try {
+                                getContentResolver().releasePersistableUriPermission(
+                                        Uri.parse(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            } catch (Exception ignored) {
+                            }
+                            folders.remove(i);
+                        }
+                        selected.clear();
+                        manageMode = false;
+                        saveFolders();
+                        stack.clear();
+                        rescan();
                     }
                 })
-                .setNegativeButton("关闭", null)
                 .show();
     }
 
@@ -252,7 +311,7 @@ public class MainActivity extends Activity {
         manageBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                showManage();
+                enterManage();
             }
         });
         LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
@@ -268,6 +327,32 @@ public class MainActivity extends Activity {
             }
         });
         titleRow.addView(addBtn);
+
+        allBtn = chip("全选", false);
+        allBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleSelectAll();
+            }
+        });
+
+        delBtn = chip("删除", false);
+        delBtn.setTextColor(0xFFFFFFFF);
+        delBtn.setBackground(Ui.round(this, 0xFFE5484D, 20f));
+        delBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                deleteSelected();
+            }
+        });
+
+        doneBtn = chip("完成", true);
+        doneBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                exitManage();
+            }
+        });
 
         header.addView(titleRow);
 
@@ -293,6 +378,10 @@ public class MainActivity extends Activity {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 Row r = rows.get(position);
+                if (manageMode && r.type == T_DIR) {
+                    toggleSelect(r.index);
+                    return;
+                }
                 if (r.type == T_DIR) {
                     stack.add(new Crumb(r.tree, r.rel, r.label));
                     rebuildRows();
@@ -304,8 +393,66 @@ public class MainActivity extends Activity {
                 }
             }
         });
+
+        // 管理模式下长按拖动排序
+        list.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+            @Override
+            public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
+                if (!manageMode || position < 0 || position >= rows.size()) return false;
+                if (rows.get(position).type != T_DIR) return false;
+                dragPos = position;
+                view.setAlpha(0.45f);
+                return true;
+            }
+        });
+        list.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, MotionEvent e) {
+                if (dragPos < 0) return false;
+                if (e.getAction() == MotionEvent.ACTION_MOVE) {
+                    int pos = list.pointToPosition((int) e.getX(), (int) e.getY());
+                    if (pos >= 0 && pos < rows.size() && pos != dragPos) {
+                        Row from = rows.get(dragPos);
+                        Row to = rows.get(pos);
+                        if (from.type == T_DIR && to.type == T_DIR
+                                && from.index >= 0 && to.index >= 0
+                                && from.index < folders.size() && to.index < folders.size()) {
+                            String[] moved = folders.remove(from.index);
+                            folders.add(to.index, moved);
+                            saveFolders();
+                            rebuildRows();
+                            dragPos = pos;
+                        }
+                    }
+                    return true;
+                }
+                if (e.getAction() == MotionEvent.ACTION_UP || e.getAction() == MotionEvent.ACTION_CANCEL) {
+                    dragPos = -1;
+                    rebuildRows();
+                    return true;
+                }
+                return true;
+            }
+        });
+
         root.addView(list, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        // 管理操作栏固定在底部：全选 …… 删除 / 完成，永远看得见
+        manageBar = new LinearLayout(this);
+        manageBar.setOrientation(LinearLayout.HORIZONTAL);
+        manageBar.setGravity(Gravity.CENTER_VERTICAL);
+        manageBar.setPadding(ph, Ui.dp(this, 10), ph, Ui.dp(this, 14));
+        manageBar.setBackgroundColor(getColor(R.color.bg));
+        manageBar.setVisibility(View.GONE);
+        manageBar.addView(allBtn);
+        manageBar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dlp.setMargins(0, 0, Ui.dp(this, 10), 0);
+        manageBar.addView(delBtn, dlp);
+        manageBar.addView(doneBtn);
+        root.addView(manageBar);
 
         empty = new TextView(this);
         empty.setTextColor(getColor(R.color.dim));
@@ -337,10 +484,16 @@ public class MainActivity extends Activity {
     }
 
     private void refreshHeaderState() {
-        boolean atRoot = stack.isEmpty();
+        boolean atRoot = stack.isEmpty() && !manageMode;
         backBtn.setVisibility(atRoot ? View.GONE : View.VISIBLE);
         addBtn.setVisibility(atRoot ? View.VISIBLE : View.GONE);
         manageBtn.setVisibility(atRoot && !folders.isEmpty() ? View.VISIBLE : View.GONE);
+
+        if (manageBar != null) manageBar.setVisibility(manageMode ? View.VISIBLE : View.GONE);
+        if (manageMode) {
+            allBtn.setText(selected.size() >= folders.size() ? "取消全选" : "全选");
+            delBtn.setText(selected.isEmpty() ? "删除" : "删除(" + selected.size() + ")");
+        }
     }
 
     // ---------------- 扫描 ----------------
@@ -434,7 +587,8 @@ public class MainActivity extends Activity {
     }
 
     private void buildRootRows() {
-        for (String[] f : folders) {
+        for (int i = 0; i < folders.size(); i++) {
+            String[] f = folders.get(i);
             int videos = 0, books = 0;
             long size = 0;
             for (Entry v : all) {
@@ -445,6 +599,8 @@ public class MainActivity extends Activity {
             }
             Row r = new Row();
             r.type = T_DIR;
+            r.index = i;
+            r.checked = selected.contains(f[0]);
             r.label = f[1];
             r.tree = f[0];
             r.rel = "";
@@ -567,6 +723,12 @@ public class MainActivity extends Activity {
     /** 标题、副标题、右上角按钮的显隐，全部随当前层级刷新 */
     private void updateHeader() {
         refreshHeaderState();
+        if (manageMode) {
+            titleView.setText("看番");
+            subtitle.setText(String.format(Locale.US, "已选 %d / %d 个文件夹 · 长按可拖动排序",
+                    selected.size(), folders.size()));
+            return;
+        }
         long size = 0;
         int videos = 0, books = 0;
         if (stack.isEmpty()) {
@@ -605,6 +767,10 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (manageMode) {
+            exitManage();
+            return;
+        }
         if (!stack.isEmpty()) {
             goUp();
             return;
@@ -758,6 +924,29 @@ public class MainActivity extends Activity {
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(Ui.dp(this, 12), Ui.dp(this, 11), Ui.dp(this, 12), Ui.dp(this, 11));
         card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        // 管理模式下左侧出现圆圈
+        if (manageMode) {
+            FrameLayout box = new FrameLayout(this);
+            if (r.checked) {
+                box.setBackground(Ui.circle(this, getColor(R.color.accent)));
+            } else {
+                GradientDrawable ring = Ui.circle(this, 0x00000000);
+                ring.setStroke(Ui.dp(this, 1.5f), Ui.alpha(getColor(R.color.dim), 0.55f));
+                box.setBackground(ring);
+            }
+            if (r.checked) {
+                ImageView ck = new ImageView(this);
+                ck.setImageResource(R.drawable.ic_check);
+                ck.setColorFilter(getColor(R.color.bg));
+                int cs = Ui.dp(this, 14);
+                box.addView(ck, new FrameLayout.LayoutParams(cs, cs, Gravity.CENTER));
+            }
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                    Ui.dp(this, 22), Ui.dp(this, 22));
+            blp.setMargins(0, 0, Ui.dp(this, 11), 0);
+            card.addView(box, blp);
+        }
 
         FrameLayout iconBox = new FrameLayout(this);
         iconBox.setBackground(Ui.round(this, Ui.alpha(getColor(R.color.accent), 0.13f), 12f));
