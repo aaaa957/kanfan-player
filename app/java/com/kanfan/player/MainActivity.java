@@ -55,7 +55,8 @@ public class MainActivity extends Activity {
     private static final String KEY_TREES = "trees";        // 旧格式：StringSet（无序）
     private static final String KEY_ORDER = "trees_order";  // 新格式：按行存储，保留顺序
 
-    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3, T_IMAGE = 4, T_ARCHIVE = 5, T_OTHER = 6;
+    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3, T_IMAGE = 4,
+            T_ARCHIVE = 5, T_OTHER = 6, T_RESTORE = 7;
 
     private ListView list;
     private TextView subtitle, manageBtn, addBtn, titleView;
@@ -74,6 +75,7 @@ public class MainActivity extends Activity {
 
     // 管理（多选删除 / 拖动排序）
     private boolean manageMode;
+    private final java.util.Set<String> hidden = new java.util.LinkedHashSet<>();
     private final java.util.Set<String> selected = new java.util.LinkedHashSet<>();
     private int dragPos = -1;
 
@@ -99,6 +101,7 @@ public class MainActivity extends Activity {
 
     static class Row {
         int type;
+        String key;
         String label;   // 标题 / 文件夹名
         String sub;     // 文件夹副标题
         String tree;
@@ -211,12 +214,13 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "还没有添加文件夹", Toast.LENGTH_SHORT).show();
             return;
         }
-        while (!stack.isEmpty()) stack.remove(stack.size() - 1);
         manageMode = true;
         selected.clear();
         dragPos = -1;
         rebuildRows();
-        Toast.makeText(this, "点圆圈选择，长按可拖动排序", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, stack.isEmpty()
+                ? "点圆圈选择文件夹，长按可拖动排序"
+                : "点圆圈选择文件，选好后点「隐藏」", Toast.LENGTH_SHORT).show();
     }
 
     private void exitManage() {
@@ -226,25 +230,45 @@ public class MainActivity extends Activity {
         rebuildRows();
     }
 
-    private void toggleSelect(int index) {
-        if (index < 0 || index >= folders.size()) return;
-        String uri = folders.get(index)[0];
-        if (!selected.remove(uri)) selected.add(uri);
+    private void toggleKey(String key) {
+        if (key == null || key.isEmpty()) return;
+        if (!selected.remove(key)) selected.add(key);
         rebuildRows();
     }
 
+    /** 当前层能勾选的 key：根目录是各个文件夹，目录内是各个文件 */
+    private List<String> selectableKeys() {
+        List<String> out = new ArrayList<>();
+        if (stack.isEmpty()) {
+            for (String[] f : folders) out.add(f[0]);
+        } else {
+            for (Row r : rows) {
+                if (r.item != null) out.add(r.key);
+            }
+        }
+        return out;
+    }
+
     private void toggleSelectAll() {
-        if (selected.size() >= folders.size()) {
+        List<String> keys = selectableKeys();
+        if (!keys.isEmpty() && selected.containsAll(keys)) {
             selected.clear();
         } else {
-            for (String[] f : folders) selected.add(f[0]);
+            selected.clear();
+            selected.addAll(keys);
         }
         rebuildRows();
     }
 
     private void deleteSelected() {
         if (selected.isEmpty()) {
-            Toast.makeText(this, "先点圆圈选中要移除的文件夹", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, stack.isEmpty()
+                    ? "先点圆圈选中要移除的文件夹"
+                    : "先点圆圈选中要隐藏的文件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!stack.isEmpty()) {
+            hideSelected();
             return;
         }
         final int n = selected.size();
@@ -272,6 +296,73 @@ public class MainActivity extends Activity {
                     }
                 })
                 .show();
+    }
+
+    /** 目录内：把选中的文件从片库里隐藏（不动磁盘） */
+    private void hideSelected() {
+        final int n = selected.size();
+        new AlertDialog.Builder(this)
+                .setMessage("在片库里隐藏选中的 " + n + " 个文件？\n\n只是不再显示，手机上的文件不会被删除。"
+                        + "\n回到首屏可以点「已隐藏」恢复。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("隐藏", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int w) {
+                        hidden.addAll(selected);
+                        saveHidden();
+                        selected.clear();
+                        manageMode = false;
+                        rescan();
+                        Toast.makeText(MainActivity.this, "已隐藏 " + n + " 个文件",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .show();
+    }
+
+    private void hideOne(Entry e) {
+        String key = docKey(e);
+        if (key.isEmpty()) return;
+        hidden.add(key);
+        saveHidden();
+        rescan();
+        Toast.makeText(this, "已隐藏，可在首屏底部恢复", Toast.LENGTH_SHORT).show();
+    }
+
+    private void restoreHidden() {
+        new AlertDialog.Builder(this)
+                .setMessage("恢复显示已隐藏的 " + hidden.size() + " 个文件？")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("恢复", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int w) {
+                        hidden.clear();
+                        saveHidden();
+                        rescan();
+                    }
+                })
+                .show();
+    }
+
+    private String docKey(Entry e) {
+        if (e == null || e.uri == null) return "";
+        try {
+            return android.provider.DocumentsContract.getDocumentId(e.uri);
+        } catch (Exception ex) {
+            return e.uri.toString();
+        }
+    }
+
+    private void loadHidden() {
+        hidden.clear();
+        try {
+            hidden.addAll(sp().getStringSet("hidden", new java.util.LinkedHashSet<String>()));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void saveHidden() {
+        sp().edit().putStringSet("hidden", new java.util.LinkedHashSet<>(hidden)).apply();
     }
 
     // ---------------- UI ----------------
@@ -389,8 +480,13 @@ public class MainActivity extends Activity {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 Row r = rows.get(position);
-                if (manageMode && r.type == T_DIR) {
-                    toggleSelect(r.index);
+                if (r.type == T_RESTORE) {
+                    restoreHidden();
+                    return;
+                }
+                if (manageMode) {
+                    if (r.type == T_HEADER) return;
+                    toggleKey(r.key);
                     return;
                 }
                 if (r.type == T_DIR) {
@@ -507,15 +603,17 @@ public class MainActivity extends Activity {
     }
 
     private void refreshHeaderState() {
-        boolean atRoot = stack.isEmpty() && !manageMode;
-        backBtn.setVisibility(atRoot ? View.GONE : View.VISIBLE);
-        addBtn.setVisibility(atRoot ? View.VISIBLE : View.GONE);
-        manageBtn.setVisibility(atRoot && !folders.isEmpty() ? View.VISIBLE : View.GONE);
+        boolean atRoot = stack.isEmpty();
+        backBtn.setVisibility(atRoot && !manageMode ? View.GONE : View.VISIBLE);
+        addBtn.setVisibility(atRoot && !manageMode ? View.VISIBLE : View.GONE);
+        manageBtn.setVisibility(!manageMode && !folders.isEmpty() ? View.VISIBLE : View.GONE);
 
         if (manageBar != null) manageBar.setVisibility(manageMode ? View.VISIBLE : View.GONE);
         if (manageMode) {
-            allBtn.setText(selected.size() >= folders.size() ? "取消全选" : "全选");
-            delBtn.setText(selected.isEmpty() ? "删除" : "删除(" + selected.size() + ")");
+            List<String> keys = selectableKeys();
+            allBtn.setText(!keys.isEmpty() && selected.containsAll(keys) ? "取消全选" : "全选");
+            String verb = stack.isEmpty() ? "删除" : "隐藏";
+            delBtn.setText(selected.isEmpty() ? verb : verb + "(" + selected.size() + ")");
         }
     }
 
@@ -545,7 +643,9 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         all.clear();
-                        all.addAll(found);
+                        for (Entry e : found) {
+                            if (!hidden.contains(docKey(e))) all.add(e);
+                        }
                         pruneStack();
                         rebuildRows();
                         measureDurations();
@@ -600,6 +700,7 @@ public class MainActivity extends Activity {
         rows.clear();
         if (stack.isEmpty()) buildRootRows();
         else buildDirRows();
+        decorateSelection();
 
         adapter.notifyDataSetChanged();
         boolean has = !rows.isEmpty();
@@ -631,6 +732,12 @@ public class MainActivity extends Activity {
             r.tree = f[0];
             r.rel = "";
             r.sub = subText(videos, books, images, archives, others, size);
+            rows.add(r);
+        }
+        if (!hidden.isEmpty()) {
+            Row r = new Row();
+            r.type = T_RESTORE;
+            r.label = "已隐藏 " + hidden.size() + " 个文件 \u00b7 点此恢复";
             rows.add(r);
         }
     }
@@ -923,7 +1030,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private View otherView(final Entry v) {
+    private View otherView(Row row) {
+        final Entry v = row.item;
         int pad = Ui.dp(this, 5);
         FrameLayout wrap = new FrameLayout(this);
         wrap.setPadding(0, 0, 0, pad);
@@ -933,6 +1041,8 @@ public class MainActivity extends Activity {
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 14), Ui.dp(this, 9));
         card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        if (manageMode) addDot(card, row.checked);
 
         FrameLayout box = new FrameLayout(this);
         box.setBackground(Ui.round(this, Ui.alpha(getColor(R.color.dim), 0.14f), 12f));
@@ -978,17 +1088,55 @@ public class MainActivity extends Activity {
     private void rowMenu(final Row row) {
         final Entry item = row.item;
         if (item == null) return;
-        final String[] items = {"重命名", "用其他应用打开"};
+        final String[] items = {"重命名", "用其他应用打开", "在片库中隐藏", "彻底删除文件"};
         new AlertDialog.Builder(this)
                 .setTitle(item.name)
                 .setItems(items, new android.content.DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(android.content.DialogInterface d, int which) {
                         if (which == 0) askRename(item);
-                        else openOther(item);
+                        else if (which == 1) openOther(item);
+                        else if (which == 2) hideOne(item);
+                        else confirmDelete(item);
                     }
                 })
                 .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void confirmDelete(final Entry item) {
+        new AlertDialog.Builder(this)
+                .setTitle("彻底删除文件？")
+                .setMessage(item.name + "\n\n\u26a0\ufe0f 会从手机存储里真正删掉，无法恢复。\n"
+                        + "如果只是不想在片库里看到它，退回上一步选「在片库中隐藏」。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        try {
+                            if (android.provider.DocumentsContract.deleteDocument(
+                                    getContentResolver(), item.uri)) {
+                                Toast.makeText(MainActivity.this, "已删除", Toast.LENGTH_SHORT).show();
+                                hidden.remove(docKey(item));
+                                saveHidden();
+                                rescan();
+                            } else {
+                                Toast.makeText(MainActivity.this, "删不掉这个文件",
+                                        Toast.LENGTH_SHORT).show();
+                            }
+                        } catch (SecurityException se) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("没有写入权限")
+                                    .setMessage("这个文件夹当初只授权了读取。请到「管理」里移除它，"
+                                            + "再重新添加一次（重新添加会同时获得写入权限）。")
+                                    .setPositiveButton("知道了", null)
+                                    .show();
+                        } catch (Exception e) {
+                            Toast.makeText(MainActivity.this, "删除失败：" + e.getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    }
+                })
                 .show();
     }
 
@@ -1054,7 +1202,8 @@ public class MainActivity extends Activity {
     }
 
     /** 图片行：方形缩略图 + 文件名 + 体积 */
-    private View imageView(final Entry v) {
+    private View imageView(Row row) {
+        final Entry v = row.item;
         int pad = Ui.dp(this, 5);
         FrameLayout wrap = new FrameLayout(this);
         wrap.setPadding(0, 0, 0, pad);
@@ -1064,6 +1213,8 @@ public class MainActivity extends Activity {
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
         card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        if (manageMode) addDot(card, row.checked);
 
         FrameLayout box = new FrameLayout(this);
         box.setBackground(Ui.round(this, getColor(R.color.surface2), 10f));
@@ -1120,7 +1271,8 @@ public class MainActivity extends Activity {
         return wrap;
     }
 
-    private View archiveView(final Entry v) {
+    private View archiveView(Row row) {
+        final Entry v = row.item;
         int pad = Ui.dp(this, 5);
         FrameLayout wrap = new FrameLayout(this);
         wrap.setPadding(0, 0, 0, pad);
@@ -1130,6 +1282,8 @@ public class MainActivity extends Activity {
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 14), Ui.dp(this, 9));
         card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        if (manageMode) addDot(card, row.checked);
 
         FrameLayout box = new FrameLayout(this);
         box.setBackground(Ui.round(this, Ui.alpha(getColor(R.color.accent), 0.13f), 12f));
@@ -1238,7 +1392,7 @@ public class MainActivity extends Activity {
 
         @Override
         public int getViewTypeCount() {
-            return 7;
+            return 8;
         }
 
         @Override
@@ -1256,16 +1410,18 @@ public class MainActivity extends Activity {
             Row r = rows.get(position);
             if (r.type == T_HEADER) return headerView(r);
             if (r.type == T_DIR) return dirView(r);
-            if (r.type == T_BOOK) return bookView(r.item);
-            if (r.type == T_IMAGE) return imageView(r.item);
-            if (r.type == T_ARCHIVE) return archiveView(r.item);
-            if (r.type == T_OTHER) return otherView(r.item);
-            return itemView(r.item);
+            if (r.type == T_BOOK) return bookView(r);
+            if (r.type == T_IMAGE) return imageView(r);
+            if (r.type == T_ARCHIVE) return archiveView(r);
+            if (r.type == T_OTHER) return otherView(r);
+            if (r.type == T_RESTORE) return restoreView(r);
+            return itemView(r);
         }
     }
 
     /** 书籍行：书本图标 + 书名 + 格式与体积（有阅读记录就标出来） */
-    private View bookView(final Entry v) {
+    private View bookView(Row row) {
+        final Entry v = row.item;
         int pad = Ui.dp(this, 5);
         FrameLayout wrap = new FrameLayout(this);
         wrap.setPadding(0, 0, 0, pad);
@@ -1275,6 +1431,8 @@ public class MainActivity extends Activity {
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(Ui.dp(this, 12), Ui.dp(this, 11), Ui.dp(this, 12), Ui.dp(this, 11));
         card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        if (manageMode) addDot(card, row.checked);
 
         FrameLayout iconBox = new FrameLayout(this);
         iconBox.setBackground(Ui.round(this, Ui.alpha(getColor(R.color.accent), 0.13f), 12f));
@@ -1313,6 +1471,50 @@ public class MainActivity extends Activity {
         wrap.addView(card, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         return wrap;
+    }
+
+    /** 管理模式下每行左侧的圆圈 */
+    private void addDot(LinearLayout card, boolean checked) {
+        FrameLayout box = new FrameLayout(this);
+        if (checked) {
+            box.setBackground(Ui.circle(this, getColor(R.color.accent)));
+            ImageView ck = new ImageView(this);
+            ck.setImageResource(R.drawable.ic_check);
+            ck.setColorFilter(getColor(R.color.bg));
+            int cs = Ui.dp(this, 14);
+            box.addView(ck, new FrameLayout.LayoutParams(cs, cs, Gravity.CENTER));
+        } else {
+            GradientDrawable ring = Ui.circle(this, 0x00000000);
+            ring.setStroke(Ui.dp(this, 1.5f), Ui.alpha(getColor(R.color.dim), 0.55f));
+            box.setBackground(ring);
+        }
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                Ui.dp(this, 22), Ui.dp(this, 22));
+        blp.setMargins(0, 0, Ui.dp(this, 11), 0);
+        card.addView(box, blp);
+    }
+
+    /** 统一算好每行的 key 与勾选状态，视图只负责画 */
+    private void decorateSelection() {
+        for (Row r : rows) {
+            if (r.item != null) {
+                r.key = docKey(r.item);
+                r.checked = manageMode && selected.contains(r.key);
+            } else if (r.type == T_DIR) {
+                r.key = r.tree;
+                r.checked = manageMode && selected.contains(r.tree);
+            }
+        }
+    }
+
+    private View restoreView(Row r) {
+        TextView t = new TextView(this);
+        t.setText(r.label);
+        t.setTextColor(getColor(R.color.accent));
+        t.setTextSize(12.5f);
+        t.setGravity(Gravity.CENTER);
+        t.setPadding(0, Ui.dp(this, 16), 0, Ui.dp(this, 16));
+        return t;
     }
 
     private View headerView(Row r) {
@@ -1413,7 +1615,8 @@ public class MainActivity extends Activity {
         return wrap;
     }
 
-    private View itemView(final Entry v) {
+    private View itemView(Row row) {
+        final Entry v = row.item;
         int pad = Ui.dp(this, 5);
         FrameLayout wrap = new FrameLayout(this);
         wrap.setPadding(0, 0, 0, pad);
@@ -1423,6 +1626,8 @@ public class MainActivity extends Activity {
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
         card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        if (manageMode) addDot(card, row.checked);
 
         FrameLayout thumbBox = new FrameLayout(this);
         int tw = Ui.dp(this, 108), th = Ui.dp(this, 61);
