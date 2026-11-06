@@ -251,13 +251,15 @@
 - **引擎**：`jlibtorrent` 1.2.0.18（libtorrent 1.1 的 Java/JNI 绑定，GPLv3），
   协议、DHT、MSE 加密、uTP 都在原生 `.so` 里，Java 这层只负责加任务和读状态
 - **后台不断**：下载由前台服务持有，切后台、锁屏都继续；通知栏显示「N 个任务 · x MB/s」
-- **下完就停种**：任务完成会自动 pause，不用你的上行带宽
-- **保存位置**：`Android/data/com.kanfan.player/files/downloads`（应用私有外部目录，
-  卸载即删、不进相册）；下载页里点任务 →「打开文件」可直接播放
+- **做种可选**：默认下完就停（不占上行）；下载页勾「下完继续做种」才会继续上传，
+  列表里会显示 `做种中 · ↑ x/s`，通知栏也会写「做种 N 个」
+- **保存位置**：`/storage/emulated/0/Android/data/com.kanfan.player/files/downloads`
+  （应用私有外部目录，卸载即删、不进相册）。多文件种子会在里面建一个以种子名命名的子文件夹；
+  下载页那行路径点一下可以复制，方便去文件管理器里找
 - **进度与任务**：任务列表（磁力/名字/暂停状态）存在 SharedPreferences，重启后自动续上，
   已下好的分片会被重新校验，不会重下
 
-> 支持 magnet 与本地 `.torrent`；http(s) 的种子直链暂未做（会提示）。不做种、不内置 tracker 列表。
+> 支持 magnet 与本地 `.torrent`；http(s) 的种子直链暂未做（会提示）。不内置 tracker 列表。
 
 ### 隐私
 
@@ -490,7 +492,8 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - 解压需要目录的**写入**权限：v2.2 之前添加的文件夹只有读权限，需要移除后重新添加一次
 - 看图不支持旋转与「保存为」，GIF 在 Android 8 及以下只能看第一帧
 - 阅读器没有书签与标注
-- 下载只支持 magnet 与本地 `.torrent`；不支持 http(s) 种子直链，也不做种
+- 下载只支持 magnet 与本地 `.torrent`；不支持 http(s) 种子直链
+- 做种默认关闭；打开后只有 App 进程活着时才上传（杀掉应用即停）
 - BT 引擎是 2018 年的 jlibtorrent 1.2.0.18（libtorrent 1.1.x，GPLv3）；32 位与 64 位都带了 `.so`，
   但原生库按 4KB 页对齐，Android 15 的 16KB 页机型可能加载失败
 - PDF 只能看：文字不可选/不可搜/不能复制；加密 PDF 打不开；超大页面按 1800px 渲染，放到 3× 以上会略糊

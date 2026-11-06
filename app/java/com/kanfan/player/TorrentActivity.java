@@ -216,16 +216,46 @@ public class TorrentActivity extends Activity {
         btns.addView(paste, xlp);
         boxPad.addView(btns, blp);
 
+        final String savePath = TorrentEngine.downloadRoot(this).getAbsolutePath();
         TextView hint = new TextView(this);
-        hint.setText("保存到 " + TorrentEngine.downloadRoot(this).getAbsolutePath());
+        hint.setText("保存到 " + savePath + "\n（点一下复制路径）");
         hint.setTextColor(getColor(R.color.dim));
         hint.setTextSize(10.5f);
-        hint.setSingleLine(true);
+        hint.setSingleLine(false);
+        hint.setMaxLines(2);
         hint.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        hint.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                android.content.ClipboardManager cm =
+                        (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                if (cm != null) {
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("path", savePath));
+                    Toast.makeText(TorrentActivity.this, "路径已复制", Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
         LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         hlp.topMargin = Ui.dp(this, 6);
         boxPad.addView(hint, hlp);
+
+        final android.widget.CheckBox seedBox = new android.widget.CheckBox(this);
+        seedBox.setText("下完继续做种（占用上行带宽）");
+        seedBox.setTextColor(getColor(R.color.dim));
+        seedBox.setTextSize(11.5f);
+        seedBox.setChecked(engine.seeding());
+        seedBox.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override
+            public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                engine.setSeeding(on);
+                reload();
+            }
+        });
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        slp.topMargin = Ui.dp(this, 2);
+        boxPad.addView(seedBox, slp);
 
         box.addView(boxPad);
         LinearLayout.LayoutParams boxLp = new LinearLayout.LayoutParams(
@@ -378,7 +408,8 @@ public class TorrentActivity extends Activity {
     }
 
     private void actions(final TorrentEngine.Task t) {
-        final boolean done = t.state == TorrentEngine.ST_DONE;
+        final boolean done = t.state == TorrentEngine.ST_DONE
+                || t.state == TorrentEngine.ST_SEED;
         final List<String> items = new ArrayList<String>();
         items.add(t.paused ? "继续下载" : "暂停");
         if (done) items.add("打开文件");
@@ -548,7 +579,8 @@ public class TorrentActivity extends Activity {
             ProgressBar bar = new ProgressBar(TorrentActivity.this, null,
                     android.R.attr.progressBarStyleHorizontal);
             bar.setMax(1000);
-            bar.setProgress(t.state == TorrentEngine.ST_DONE ? 1000 : t.percent() * 10);
+            bar.setProgress((t.state == TorrentEngine.ST_DONE || t.state == TorrentEngine.ST_SEED)
+                    ? 1000 : t.percent() * 10);
             card.addView(bar, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(TorrentActivity.this, 5)));
             return card;
@@ -559,7 +591,10 @@ public class TorrentActivity extends Activity {
         String size = Ui.fmtSize(t.total);
         switch (t.state) {
             case TorrentEngine.ST_DONE:
-                return "已完成 · " + size;
+                return "已完成 · " + size + "（不做种）";
+            case TorrentEngine.ST_SEED:
+                return String.format(Locale.US, "做种中 · ↑ %s/s · %d 个 peer · %s",
+                        TorrentService.fmt(t.up), t.peers, size);
             case TorrentEngine.ST_PAUSED:
                 return "已暂停 · " + t.percent() + "%" + (size.isEmpty() ? "" : " · " + size);
             case TorrentEngine.ST_ERROR:

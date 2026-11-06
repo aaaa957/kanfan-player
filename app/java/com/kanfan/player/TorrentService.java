@@ -86,19 +86,26 @@ public class TorrentService extends Service {
 
     private void update() {
         List<TorrentEngine.Task> list = engine.snapshot();
-        int active = 0;
+        int active = 0, seeding = 0;
+        long up = 0;
         for (TorrentEngine.Task t : list) {
             if (t.state == TorrentEngine.ST_DOWN || t.state == TorrentEngine.ST_META
                     || t.state == TorrentEngine.ST_CHECK) {
                 active++;
+            } else if (t.state == TorrentEngine.ST_SEED) {
+                seeding++;
+                up += t.up;
             }
         }
         long rate = engine.totalRate();
         String text;
-        if (active == 0) {
-            text = list.isEmpty() ? "没有任务" : "已暂停 · " + list.size() + " 个任务";
-        } else {
+        if (active > 0) {
             text = String.format(Locale.US, "%d 个任务 · %s/s", active, fmt(rate));
+            if (seeding > 0) text += String.format(Locale.US, " · 做种 %d", seeding);
+        } else if (seeding > 0) {
+            text = String.format(Locale.US, "做种 %d 个 · ↑ %s/s", seeding, fmt(up));
+        } else {
+            text = list.isEmpty() ? "没有任务" : "已暂停 · " + list.size() + " 个任务";
         }
         int hash = text.hashCode();
         if (hash != lastText) {

@@ -35,9 +35,10 @@ public final class TorrentEngine {
     public static final int ST_META = 1;    // 正在取 magnet 元数据
     public static final int ST_DOWN = 2;    // 下载中
     public static final int ST_CHECK = 3;   // 校验已有文件
-    public static final int ST_DONE = 4;    // 下完了（同时停掉做种）
+    public static final int ST_DONE = 4;    // 下完了（不做种）
     public static final int ST_PAUSED = 5;
     public static final int ST_ERROR = 6;
+    public static final int ST_SEED = 7;    // 做种中
 
     public static final class Task {
         public String source = "";     // magnet / 本地 .torrent 路径
@@ -45,6 +46,7 @@ public final class TorrentEngine {
         public String hash = "";
         public long done, total;
         public int rate;
+        public int up;
         public int peers, seeds;
         public int state = ST_WAIT;
         public boolean paused;
@@ -65,6 +67,7 @@ public final class TorrentEngine {
             t.done = done;
             t.total = total;
             t.rate = rate;
+            t.up = up;
             t.peers = peers;
             t.seeds = seeds;
             t.state = state;
@@ -86,12 +89,40 @@ public final class TorrentEngine {
     private SessionManager sm;
     private SessionHandle sh;
     private boolean started;
+    private boolean seeding;
     private File root;
 
     private TorrentEngine(Context c) {
         app = c;
         root = downloadRoot(c);
+        seeding = sp().getBoolean("seeding", false);
         load();
+    }
+
+    /** 下完是否继续做种（默认否） */
+    public boolean seeding() {
+        return seeding;
+    }
+
+    /** 切换做种：关掉时把已完成的任务立刻停掉，打开时让它们重新跑起来 */
+    public synchronized void setSeeding(boolean on) {
+        seeding = on;
+        sp().edit().putBoolean("seeding", on).apply();
+        for (Task t : tasks) {
+            if (t.handle == null) continue;
+            try {
+                if (!on && t.state == ST_SEED) {
+                    t.handle.pause();
+                    t.paused = true;
+                    t.state = ST_DONE;
+                } else if (on && t.state == ST_DONE && t.handle.status().isFinished()) {
+                    t.handle.resume();
+                    t.paused = false;
+                    t.state = ST_SEED;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
     }
 
     public static File downloadRoot(Context c) {
@@ -153,7 +184,8 @@ public final class TorrentEngine {
 
     public synchronized boolean hasActive() {
         for (Task t : tasks) {
-            if (t.state != ST_DONE && t.state != ST_PAUSED && t.state != ST_ERROR) return true;
+            if (t.state != ST_DONE && t.state != ST_SEED
+                    && t.state != ST_PAUSED && t.state != ST_ERROR) return true;
         }
         return false;
     }
@@ -250,14 +282,22 @@ public final class TorrentEngine {
         t.total = st.totalWanted();
         t.done = st.totalWantedDone();
         t.rate = st.downloadRate();
+        t.up = st.uploadRate();
         t.peers = st.numPeers();
         t.seeds = st.numSeeds();
         t.error = null;
 
         if (st.isFinished()) {
-            t.state = ST_DONE;
-            if (!t.paused) {
-                // 下完就不做种了：省电、省上传
+            if (t.paused) {
+                // 用户手动暂停过，别被做种开关又拉起来
+                t.state = ST_PAUSED;
+                return;
+            }
+            if (seeding) {
+                t.state = ST_SEED;
+            } else {
+                // 用户没开做种：下完就停，省电省上行
+                t.state = ST_DONE;
                 try {
                     h.pause();
                 } catch (Throwable ignored) {
