@@ -63,7 +63,7 @@ public class MainActivity extends Activity {
 
     private ListView list;
     private TextView subtitle, manageBtn, addBtn, titleView;
-    private TextView allBtn, delBtn, doneBtn, zipBtn;
+    private TextView allBtn, delBtn, doneBtn, zipBtn, dlBtn;
     private LinearLayout manageBar;
     private ImageView backBtn;
     private TextView empty;
@@ -417,6 +417,18 @@ public class MainActivity extends Activity {
         titleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
         titleRow.addView(titleView, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        dlBtn = chip("下载", false);
+        dlBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                startActivity(new Intent(MainActivity.this, TorrentActivity.class));
+            }
+        });
+        LinearLayout.LayoutParams dlp2 = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dlp2.setMargins(Ui.dp(this, 8), 0, Ui.dp(this, 4), 0);
+        titleRow.addView(dlBtn, dlp2);
 
         manageBtn = chip("管理", false);
         manageBtn.setOnClickListener(new View.OnClickListener() {
@@ -909,6 +921,7 @@ public class MainActivity extends Activity {
         backBtn.setVisibility(atRoot && !manageMode ? View.GONE : View.VISIBLE);
         addBtn.setVisibility(atRoot && !manageMode ? View.VISIBLE : View.GONE);
         manageBtn.setVisibility(!manageMode && !folders.isEmpty() ? View.VISIBLE : View.GONE);
+        if (dlBtn != null) dlBtn.setVisibility(manageMode ? View.GONE : View.VISIBLE);
 
         if (manageBar != null) manageBar.setVisibility(manageMode ? View.VISIBLE : View.GONE);
         if (zipBtn != null) {

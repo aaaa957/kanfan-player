@@ -26,6 +26,7 @@
 | **外挂弹幕** | 自动加载同名 B 站 `.xml` 弹幕；`弹幕` 按钮里可换文件或手选 `.xml` / `.ass`（弹弹play 导出） |
 | **看图** | 点文件夹里的 `jpg / png / webp / gif` 直接全屏查看；**左右切换（跟手拖拽）与连续下滑两种模式**；双指缩放、双击放大、放大后拖动 |
 | **解压** | 点文件夹里的 `.zip` / `.7z` / `.rar` 直接查看内容并解压：支持 ZipCrypto 与 WinZip AES 加密、rar5、7z（LZMA/LZMA2），以及 **rar / zip / 7z 三种分卷**；需要密码时弹窗输入 |
+| **下载** | 顶部「下载」→ 贴 magnet 或选 `.torrent`：内置 BT 引擎（jlibtorrent），支持 DHT/加密/uTP/磁力元数据；后台前台都在下，通知栏显示速度；下完自动停种，可在下载页直接播放 |
 | **压缩** | 管理页勾选文件 → 压缩成 ZIP：流式写入、Zip64、已是压缩格式的自动改存储；有进度、可取消，失败不留半截文件 |
 | **重命名** | 长按任意文件 → 重命名，可改扩展名（`x.mp4` → `x.zip` 直接当压缩包打开）；也可「用其他应用打开」交给系统处理 |
 | **管理 / 隐藏** | 管理页多选：首屏移除/拖动排序文件夹，目录内隐藏文件；首屏底部可一键恢复；长按可彻底删除 |
@@ -243,26 +244,45 @@
   同时**不支持加密的 7z**（C 解码器没有 AES 层）
 - 原生库没编进去也能用，只是 7z/rar 会提示「原生库没能加载」，其余功能不受影响
 
+### 下载（磁力 / BT）
+
+顶部「下载」进下载页：贴 `magnet:` 链接点「添加」，或者选一个本地 `.torrent` 文件。
+
+- **引擎**：`jlibtorrent` 1.2.0.18（libtorrent 1.1 的 Java/JNI 绑定，GPLv3），
+  协议、DHT、MSE 加密、uTP 都在原生 `.so` 里，Java 这层只负责加任务和读状态
+- **后台不断**：下载由前台服务持有，切后台、锁屏都继续；通知栏显示「N 个任务 · x MB/s」
+- **下完就停种**：任务完成会自动 pause，不用你的上行带宽
+- **保存位置**：`Android/data/com.kanfan.player/files/downloads`（应用私有外部目录，
+  卸载即删、不进相册）；下载页里点任务 →「打开文件」可直接播放
+- **进度与任务**：任务列表（磁力/名字/暂停状态）存在 SharedPreferences，重启后自动续上，
+  已下好的分片会被重新校验，不会重下
+
+> 支持 magnet 与本地 `.torrent`；http(s) 的种子直链暂未做（会提示）。不做种、不内置 tracker 列表。
+
 ### 隐私
 
-`AndroidManifest.xml` 里只有一条权限：
+| 权限 | 什么时候用 |
+|---|---|
+| `WAKE_LOCK` | 播放时屏幕常亮 |
+| `INTERNET` / `ACCESS_NETWORK_STATE` | **只有点「添加」开始下载时才用**；不下载就不发任何网络请求 |
+| `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_DATA_SYNC` | 后台下载时挂前台通知，Android 8+ 否则会被掐 |
+| `POST_NOTIFICATIONS` | 显示下载进度通知（Android 13+ 会问一次） |
 
-```xml
-<uses-permission android:name="android.permission.WAKE_LOCK" />
-```
+没有统计、没有广告、没有崩溃上报，APK 里也没有任何第三方网络 SDK——唯一的联网代码是 BT 引擎本身。
 
-视频通过系统的 **Storage Access Framework** 访问 —— 只读你亲手选中的那个目录，连相册（MediaStore）都读不到。没有 `INTERNET`，物理上不可能联网。
+看视频通过系统的 **Storage Access Framework** 访问：只读你亲手选中的那个目录，连相册（MediaStore）都读不到。
+下载写在应用自己的外部目录 `Android/data/com.kanfan.player/files/downloads`，卸载即删，不会污染你的相册。
 
 ---
 
 ## 架构
 
-零第三方库（没有 AndroidX、没有 ExoPlayer、没有 Glide），全部用系统 API 拼出来：
+除 BT 引擎外零第三方库（没有 AndroidX、没有 ExoPlayer、没有 Glide），其余全部用系统 API 拼出来：
 
 | 文件 | 行数 | 职责 |
 |---|---:|---|
 | `PlayerActivity.java` | 1289 | 播放器本体：MediaPlayer + SurfaceView、手势分发、连播、进度记忆、控制条、外挂字幕/弹幕接线 |
-| `MainActivity.java` | 2103 | 片库：目录授权、分层浏览、缩略图、管理页（隐藏/拖动排序/压缩）、长按重命名 |
+| `MainActivity.java` | 2116 | 片库：目录授权、分层浏览、缩略图、管理页（隐藏/拖动排序/压缩）、长按重命名 |
 | `ArchiveActivity.java` | 1142 | 压缩包：条目列表、密码弹窗、目标选择、进度与取消、分卷归一 |
 | `ImageActivity.java` | 458 | 看图：同目录列表、两种模式切换、预解码、GIF 动图 |
 | `PagerLayout.java` | 343 | 左右翻页容器：跟手拖动、松手吸附、边缘阻尼、三槽位复用 |
@@ -279,6 +299,9 @@
 | `Store.java` | 81 | SharedPreferences：播放位置、阅读进度、字号/背景/阅读方式、已添加目录 |
 | `ZoomView.java` | 192 | 单张图画布：双击/双指缩放、放大后拖动 |
 | `Zip.java` | 717 | zip 读取：中央目录 / ZIP64 / deflate / ZipCrypto / WinZip AES，可跨分卷（纯 Java） |
+| `TorrentActivity.java` | 587 | 下载页：magnet 输入、选种子、任务列表与操作、下载文件播放 |
+| `TorrentEngine.java` | 500 | BT 引擎外壳：任务增删改查、状态轮询、持久化、文件枚举 |
+| `TorrentService.java` | 166 | 下载前台服务：持有引擎、每秒刷新、通知栏速度 |
 | `PdfActivity.java` | 449 | PDF 阅读：PdfRenderer 生命周期、后台渲染、跳页、页码记忆、非 seekable 落盘兜底 |
 | `PdfView.java` | 369 | PDF 画布：连续滚动、双指/双击缩放、惯性、按需渲染 + LruCache |
 | `PdfLayout.java` | 108 | PDF 排版算术：页偏移、可视范围、缩放后平移夹取（纯 Java） |
@@ -344,6 +367,19 @@ ANDROID_SDK_ROOT=/path/to/android-sdk bash build.sh
 > **签名密钥务必自己备份。** 换一把钥匙后，新 APK 无法覆盖安装旧版，只能先卸载 —— 而卸载会清掉播放记录。仓库里不会提交密钥（`.gitignore` 已排除）。
 
 ---
+
+### 第三方二进制
+
+`libs/` 下是从 Maven Central 取的 jlibtorrent 1.2.0.18：
+
+```
+libs/jlibtorrent.jar                              # 527 个 Java 类（JNI 绑定）
+libs/jni/arm64-v8a/libjlibtorrent-1.2.0.18.so     # 6.6 MB
+libs/jni/armeabi-v7a/libjlibtorrent-1.2.0.18.so   # 6.2 MB
+```
+
+构建脚本会把 jar 一起丢给 `d8`，并把 `.so` 塞进 APK 的 `lib/<abi>/`。
+原生库必须保留带版本号的文件名——jlibtorrent 先按 `libjlibtorrent-<ver>` 找，找不到才退回 `libjlibtorrent`。
 
 ## 测试
 
@@ -454,6 +490,9 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - 解压需要目录的**写入**权限：v2.2 之前添加的文件夹只有读权限，需要移除后重新添加一次
 - 看图不支持旋转与「保存为」，GIF 在 Android 8 及以下只能看第一帧
 - 阅读器没有书签与标注
+- 下载只支持 magnet 与本地 `.torrent`；不支持 http(s) 种子直链，也不做种
+- BT 引擎是 2018 年的 jlibtorrent 1.2.0.18（libtorrent 1.1.x，GPLv3）；32 位与 64 位都带了 `.so`，
+  但原生库按 4KB 页对齐，Android 15 的 16KB 页机型可能加载失败
 - PDF 只能看：文字不可选/不可搜/不能复制；加密 PDF 打不开；超大页面按 1800px 渲染，放到 3× 以上会略糊
 - 倍速在退出播放器后回到 1.0×，不做跨会话记忆
 - 没有接入 MediaSession，锁屏与通知栏无控制，也没有画中画
@@ -463,4 +502,8 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 
 ## 许可
 
-[MIT](LICENSE)
+本仓库自己的代码是 [MIT](LICENSE)。
+
+但 APK 里打包了 **GPLv3** 的 [jlibtorrent](https://github.com/frostwire/jlibtorrent)
+（libtorrent 的 Java 绑定，`libs/jlibtorrent.jar` + `libs/jni/*/*.so`）——
+所以**分发 APK 时整体按 GPLv3 走**。源码本来就公开，满足它的要求。

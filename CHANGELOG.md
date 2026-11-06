@@ -183,6 +183,39 @@
 
 ---
 
+## v2.8 — 2026-11-06
+
+### 新增：磁力 / BT 下载
+
+顶部多了一个「下载」：贴 `magnet:` 点「添加」，或者选一个本地 `.torrent`。
+
+- 引擎用 **jlibtorrent 1.2.0.18**（libtorrent 1.1 的 Java/JNI 绑定）：DHT、MSE 加密、uTP、
+  磁力元数据交换都是现成的，不是「只能连明文 TCP」的半成品
+- **前后台都在下**：前台服务持有引擎，切后台、锁屏继续；通知栏显示「N 个任务 · x MB/s」
+- 下完自动停种（不占上行）；任务列表持久化，重启后自动续上，已有分片会重新校验
+- 下载页里点任务 →「打开文件」直接播放（保存目录是应用私有外部目录，卸载即删）
+- 浏览器里点 magnet 链接也能直接拉起本应用（`VIEW` + `magnet` scheme）
+
+### 代价（说清楚）
+
+- APK 从 **738 KB 变成 5.7 MB**：两个 ABI 的 `libjlibtorrent.so` 占 6.6 MB / 6.2 MB
+- 权限多了 `INTERNET` / `ACCESS_NETWORK_STATE` / `FOREGROUND_SERVICE(_DATA_SYNC)` / `POST_NOTIFICATIONS`
+- 不再「零第三方依赖」：除这个 BT 引擎外仍然是零依赖
+- 许可证：jlibtorrent 是 **GPLv3**，分发 APK 时整体按 GPLv3（源码本来就公开）
+
+### 验证
+
+- 在 JVM 上用 Windows 版原生库跑了冒烟：session 启动成功，DHT 5 秒爬到 **97 个节点**，
+  加一个 magnet 后状态是 `DOWNLOADING_METADATA`、**11 个 peer**——说明引擎和这层调用是通的
+- Android 侧（前台服务、通知、私有目录写入）**没有真机**，仍需装机验证
+
+### 已知限制
+
+- 只支持 magnet 与本地 `.torrent`，http(s) 种子直链暂未做；不做种
+- 原生库是 2018 年按 4KB 页对齐编的，Android 15 的 16KB 页机型可能加载失败
+
+---
+
 ## v2.7 — 2026-11-06
 
 ### 新增：PDF 阅读

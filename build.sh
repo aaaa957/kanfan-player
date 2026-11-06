@@ -101,13 +101,15 @@ find "$APP/java" "$OUT/gen" -name "*.java" > "$OUT/src.txt"
 # -parameters 不是可选项：JDK 21 起会给内部类构造函数写出「名字索引为 0」的 MethodParameters 属性，
 # 旧版 d8 读到时会对空名调用 length() 直接抛 NPE。加上它参数就有真实名字，d8 便能正常解析。
 javac -source 8 -target 8 -encoding UTF-8 -nowarn -parameters \
-  -bootclasspath "$(winpath "$PLATFORM")" -d "$OUT/classes" @"$OUT/src.txt" \
+  -bootclasspath "$(winpath "$PLATFORM")" \
+  -classpath "$(winpath "$PWD/libs/jlibtorrent.jar")" \
+  -d "$OUT/classes" @"$OUT/src.txt" \
   > "$OUT/javac.log" 2>&1 || { echo "javac 失败："; cat "$OUT/javac.log"; exit 1; }
 echo "    生成 $(find "$OUT/classes" -name '*.class' | wc -l) 个 class"
 
 echo "==> 4/6 dex（d8 只接受文件列表，不接受目录）"
 find "$OUT/classes" -name "*.class" > "$OUT/classes.txt"
-"$D8" --min-api "$MIN_SDK" --lib "$(winpath "$PLATFORM")" --output "$OUT/dex" @"$OUT/classes.txt" \
+"$D8" --min-api "$MIN_SDK" --lib "$(winpath "$PLATFORM")" --output "$OUT/dex"   @"$OUT/classes.txt" "$(winpath "$PWD/libs/jlibtorrent.jar")" \
   > "$OUT/d8.log" 2>&1 || { echo "d8 失败："; head -c 2000 "$OUT/d8.log"; exit 1; }
 [ -f "$OUT/dex/classes.dex" ] || { echo "d8 未产出 classes.dex"; cat "$OUT/d8.log"; exit 1; }
 
@@ -132,6 +134,14 @@ with zipfile.ZipFile(os.path.join(out, "unsigned.apk"), "a", zipfile.ZIP_DEFLATE
                 count += 1
     if count == 0:
         print("   （没有原生库，只打 Java 部分）")
+    # BT 引擎：libs/jni/<abi>/libjlibtorrent.so -> lib/<abi>/
+    jt = os.path.join(root, "libs", "jni")
+    if os.path.isdir(jt):
+        for abi in sorted(os.listdir(jt)):
+            so = os.path.join(jt, abi, "libjlibtorrent-1.2.0.18.so")
+            if os.path.isfile(so):
+                z.write(so, "lib/%s/libjlibtorrent-1.2.0.18.so" % abi)
+                print("   已写入 lib/%s/libjlibtorrent-1.2.0.18.so (%.1f MB)" % (abi, os.path.getsize(so) / 1048576.0))
 PY
 
 echo "==> 6/6 对齐 + 签名"
