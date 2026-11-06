@@ -48,6 +48,14 @@ public class VolsTest {
         eq("part10 排在最后", s10.names[2], "a.part10.rar");
         eq("part10 缺卷提示", s10.gap, "缺第 3 卷");
 
+        // 少的是第一卷
+        List<String> no1 = ls("a.part2.rar", "a.part3.rar");
+        eq("缺第一卷", Vols.resolve("a.part2.rar", no1).gap, "缺第 1 卷");
+        List<String> zno1 = ls("c.z02", "c.z03", "c.zip");
+        eq("zip 缺第一卷", Vols.resolve("c.zip", zno1).gap, "缺第 1 卷");
+        List<String> nno1 = ls("d.7z.002", "d.7z.003");
+        eq("7z 缺第一卷", Vols.resolve("d.7z.002", nno1).gap, "缺第 1 卷");
+
         // ---- 旧式 rar：name.rar + name.r00 ----
         List<String> old = ls("b.rar", "b.r00", "b.r01");
         Vols.Set so = Vols.resolve("b.r01", old);

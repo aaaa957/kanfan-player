@@ -359,7 +359,7 @@ java -cp out/tests ZipVolTest   # 分卷 zip：现场切卷，跨卷读、缺卷
 java -cp out/tests ZipWriteTest # 压缩：存储/deflate/Zip64/UTF-8 名/取消，产物交给 7z t
 ```
 
-**309 项用例**，目前全部通过：
+**312 项用例**，目前全部通过：
 
 | 用例 | 数量 | 重点覆盖 |
 |---|---:|---|
@@ -371,7 +371,7 @@ java -cp out/tests ZipWriteTest # 压缩：存储/deflate/Zip64/UTF-8 名/取消
 | `FlowTest` | 24 | 章节定位的边界、章内比例、裁剪后偏移平移、无效裁剪 |
 | `SwipeTest` | 26 | 翻页阈值、甩动速度方向、首尾边界、阻尼系数、吸附目标与动画时长 |
 | `ZipTest` | 57 | 用 7-Zip 现场生成的 5 种 zip 逐字节比对；错密码必须被拒；坏文件必须抛错 |
-| `VolsTest` | 30 | 新式/旧式 rar、`.z01` 分卷、7-Zip 切卷的归组与排序；`part10` 按数值排；缺卷提示 |
+| `VolsTest` | 33 | 新式/旧式 rar、`.z01` 分卷、7-Zip 切卷的归组与排序；`part10` 按数值排；缺卷提示 |
 | `ZipVolTest` | 8 | 把完整 zip 切成 2/3 卷（切点故意不对齐）后跨卷读；少一卷必须报错 |
 | `ZipWriteTest` | 26 | 写出来的包交给 `7z t` 校验；deflate/store、Zip64、未知大小、两万条目、取消 |
 

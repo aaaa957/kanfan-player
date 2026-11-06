@@ -185,8 +185,9 @@ public class Scan {
             if (cur != null) cur.close();
         }
         // 分卷只留主卷那一行：刀剑.part1.rar 一行，part2/part3 不重复出现
+        java.util.Set<String> skip = Vols.secondaryNames(names);
         for (Entry v : mine) {
-            if (v.isArchive() && Vols.secondary(v.name, names)) continue;
+            if (v.isArchive() && skip.contains(v.name)) continue;
             out.add(v);
         }
         for (String[] d : dirs) {

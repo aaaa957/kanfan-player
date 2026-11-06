@@ -123,6 +123,35 @@ public final class Vols {
     }
 
     /**
+     * 一次算出整个目录里该藏起来的卷名。
+     * 逐个调 secondary() 是 O(n²)，一个目录几千个文件时会卡住扫描。
+     */
+    public static java.util.Set<String> secondaryNames(List<String> siblings) {
+        java.util.Set<String> out = new java.util.HashSet<String>();
+        if (siblings == null || siblings.isEmpty()) return out;
+        java.util.Map<String, List<String>> groups = new java.util.HashMap<String, List<String>>();
+        for (String n : siblings) {
+            String k = keyOf(n);
+            if (k == null) continue;
+            List<String> g = groups.get(k);
+            if (g == null) {
+                g = new ArrayList<String>();
+                groups.put(k, g);
+            }
+            g.add(n);
+        }
+        for (List<String> g : groups.values()) {
+            if (g.size() < 2) continue;
+            Set s = resolve(g.get(0), siblings);
+            if (s == null) continue;
+            for (String n : g) {
+                if (!n.equalsIgnoreCase(s.primary)) out.add(n);
+            }
+        }
+        return out;
+    }
+
+    /**
      * 把 name 归一到它所在的卷组。siblings 是同一个目录里的所有名字（含 name）。
      * 单文件也返回 size=1 的 Set；完全不像分卷时返回 size=1 的 Set。
      */
@@ -176,19 +205,22 @@ public final class Vols {
     private static String gapOf(String key, String[] names) {
         if (names.length < 2) return null;
         int prev = -1;
+        int first = -1;
         for (String n : names) {
             Part p = parse(n);
             if (p == null) continue;
             int cur;
             if (key.startsWith("Z|") && n.toLowerCase(Locale.US).endsWith(".zip")) continue; // 最后一卷
             if (key.startsWith("R|") && n.toLowerCase(Locale.US).endsWith(".rar")) continue;  // 第一卷
-            if (key.startsWith("N|")) cur = (int) p.order;
-            else cur = (int) p.order;
+            cur = (int) p.order;
+            if (first < 0) first = cur;
             if (prev >= 0 && cur != prev + 1) {
                 return String.format(Locale.US, "缺第 %d 卷", prev + 1);
             }
             prev = cur;
         }
+        // 从第 2 卷起才有，说明第一卷丢了
+        if (first > 1 && !key.startsWith("R|")) return "缺第 1 卷";
         return null;
     }
 
