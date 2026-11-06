@@ -49,11 +49,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class MainActivity extends Activity {
 
     private static final int REQ_TREE = 2001;
+    private static final int REQ_ARCHIVE = 2002;
     private static final String PREF = "kanfan_folders";
     private static final String KEY_TREES = "trees";        // 旧格式：StringSet（无序）
     private static final String KEY_ORDER = "trees_order";  // 新格式：按行存储，保留顺序
 
-    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3, T_IMAGE = 4;
+    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3, T_IMAGE = 4, T_ARCHIVE = 5;
 
     private ListView list;
     private TextView subtitle, manageBtn, addBtn, titleView;
@@ -164,6 +165,7 @@ public class MainActivity extends Activity {
         try {
             Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
             i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                     | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
             startActivityForResult(i, REQ_TREE);
@@ -175,12 +177,18 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_ARCHIVE) {
+            if (resultCode == RESULT_OK) rescan();
+            return;
+        }
         if (requestCode != REQ_TREE || resultCode != RESULT_OK || data == null) return;
         Uri tree = data.getData();
         if (tree == null) return;
+        int takeFlags = data.getFlags()
+                & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        if (takeFlags == 0) takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION;
         try {
-            getContentResolver().takePersistableUriPermission(tree,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getContentResolver().takePersistableUriPermission(tree, takeFlags);
         } catch (Exception ignored) {
         }
         String name = Scan.treeName(this, tree);
@@ -394,6 +402,8 @@ public class MainActivity extends Activity {
                     read(r.item);
                 } else if (r.type == T_IMAGE && r.item != null) {
                     openImage(r.item);
+                } else if (r.type == T_ARCHIVE && r.item != null) {
+                    openArchive(r.item);
                 }
             }
         });
@@ -593,12 +603,13 @@ public class MainActivity extends Activity {
     private void buildRootRows() {
         for (int i = 0; i < folders.size(); i++) {
             String[] f = folders.get(i);
-            int videos = 0, books = 0, images = 0;
+            int videos = 0, books = 0, images = 0, archives = 0;
             long size = 0;
             for (Entry v : all) {
                 if (!f[0].equals(v.tree)) continue;
                 if (v.isBook()) books++;
                 else if (v.isImage()) images++;
+                else if (v.isArchive()) archives++;
                 else videos++;
                 size += v.size;
             }
@@ -609,13 +620,13 @@ public class MainActivity extends Activity {
             r.label = f[1];
             r.tree = f[0];
             r.rel = "";
-            r.sub = subText(videos, books, images, size);
+            r.sub = subText(videos, books, images, archives, size);
             rows.add(r);
         }
     }
 
     /** 「52 个视频 · 3 本 · 13.4 GB」这样的副标题 */
-    private String subText(int videos, int books, int images, long size) {
+    private String subText(int videos, int books, int images, int archives, long size) {
         StringBuilder sb = new StringBuilder();
         if (videos > 0) sb.append(videos).append(" 个视频");
         if (books > 0) {
@@ -625,6 +636,10 @@ public class MainActivity extends Activity {
         if (images > 0) {
             if (sb.length() > 0) sb.append(" · ");
             sb.append(images).append(" 张图");
+        }
+        if (archives > 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(archives).append(" 个压缩包");
         }
         if (sb.length() == 0) return "空文件夹";
         return sb.append(" · ").append(sizeText(size)).toString();
@@ -666,7 +681,7 @@ public class MainActivity extends Activity {
                 r.label = d.name;
                 r.tree = cur.tree;
                 r.rel = d.rel;
-                r.sub = subText(d.videoCount, d.bookCount, d.imageCount, d.size);
+                r.sub = subText(d.videoCount, d.bookCount, d.imageCount, d.archiveCount, d.size);
                 rows.add(r);
             }
         }
@@ -674,10 +689,12 @@ public class MainActivity extends Activity {
         List<Entry> videos = new ArrayList<>();
         List<Entry> books = new ArrayList<>();
         List<Entry> pics = new ArrayList<>();
+        List<Entry> zips = new ArrayList<>();
         for (int idx : Nav.directOf(cur.rel, rels)) {
             Entry e = scoped.get(idx);
             if (e.isBook()) books.add(e);
             else if (e.isImage()) pics.add(e);
+            else if (e.isArchive()) zips.add(e);
             else videos.add(e);
         }
         java.util.Comparator<Entry> byTitle = new java.util.Comparator<Entry>() {
@@ -689,6 +706,7 @@ public class MainActivity extends Activity {
         Collections.sort(videos, byTitle);
         Collections.sort(books, byTitle);
         Collections.sort(pics, byTitle);
+        Collections.sort(zips, byTitle);
 
         if (!videos.isEmpty()) {
             Row h = new Row();
@@ -728,6 +746,19 @@ public class MainActivity extends Activity {
                 rows.add(r);
             }
         }
+
+        if (!zips.isEmpty()) {
+            Row h = new Row();
+            h.type = T_HEADER;
+            h.label = "压缩包";
+            rows.add(h);
+            for (Entry z : zips) {
+                Row r = new Row();
+                r.type = T_ARCHIVE;
+                r.item = z;
+                rows.add(r);
+            }
+        }
     }
 
     /** 体积文案：0 也要显示成「0 MB」，避免副标题出现空尾巴 */
@@ -755,18 +786,19 @@ public class MainActivity extends Activity {
             return;
         }
         long size = 0;
-        int videos = 0, books = 0, images = 0;
+        int videos = 0, books = 0, images = 0, archives = 0;
         if (stack.isEmpty()) {
             titleView.setText("看番");
             for (Entry v : all) {
                 size += v.size;
                 if (v.isBook()) books++;
                 else if (v.isImage()) images++;
+                else if (v.isArchive()) archives++;
                 else videos++;
             }
             if (folders.isEmpty()) subtitle.setText("还没有添加文件夹");
             else {
-                String cnt = subText(videos, books, images, size);
+                String cnt = subText(videos, books, images, archives, size);
                 subtitle.setText(String.format(Locale.US, "%d 个文件夹 · %s",
                         folders.size(), cnt));
             }
@@ -778,11 +810,12 @@ public class MainActivity extends Activity {
             if (cur.tree.equals(v.tree) && Nav.under(v.relPath, cur.rel)) {
                 if (v.isBook()) books++;
                 else if (v.isImage()) images++;
+                else if (v.isArchive()) archives++;
                 else videos++;
                 size += v.size;
             }
         }
-        subtitle.setText(subText(videos, books, images, size));
+        subtitle.setText(subText(videos, books, images, archives, size));
     }
 
     private void goUp() {
@@ -836,6 +869,15 @@ public class MainActivity extends Activity {
         it.putExtra("tree", v.tree);
         it.putExtra("rel", v.relPath);
         startActivity(it);
+    }
+
+    private void openArchive(Entry v) {
+        Intent it = new Intent(this, ArchiveActivity.class);
+        it.putExtra("uri", v.uri.toString());
+        it.putExtra("name", v.name);
+        it.putExtra("tree", v.tree);
+        it.putExtra("rel", v.relPath);
+        startActivityForResult(it, REQ_ARCHIVE);
     }
 
     /** 图片行：方形缩略图 + 文件名 + 体积 */
@@ -905,6 +947,61 @@ public class MainActivity extends Activity {
         return wrap;
     }
 
+    private View archiveView(final Entry v) {
+        int pad = Ui.dp(this, 5);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(0, 0, 0, pad);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 14), Ui.dp(this, 9));
+        card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        FrameLayout box = new FrameLayout(this);
+        box.setBackground(Ui.round(this, Ui.alpha(getColor(R.color.accent), 0.13f), 12f));
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(R.drawable.ic_archive);
+        int is = Ui.dp(this, 24);
+        box.addView(ic, new FrameLayout.LayoutParams(is, is, Gravity.CENTER));
+
+        int side = Ui.dp(this, 46);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(side, side);
+        blp.setMargins(0, 0, Ui.dp(this, 12), 0);
+        card.addView(box, blp);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        card.addView(col, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView name = new TextView(this);
+        name.setText(v.title);
+        name.setTextColor(getColor(R.color.text));
+        name.setTextSize(14.5f);
+        name.setMaxLines(2);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        col.addView(name);
+
+        TextView meta = new TextView(this);
+        String ext = v.name.contains(".")
+                ? v.name.substring(v.name.lastIndexOf('.') + 1).toUpperCase(Locale.US) : "ZIP";
+        meta.setText(ext + " · " + Ui.fmtSize(v.size));
+        meta.setTextColor(getColor(R.color.dim));
+        meta.setTextSize(11.5f);
+        meta.setPadding(0, Ui.dp(this, 4), 0, 0);
+        col.addView(meta);
+
+        ImageView chev = new ImageView(this);
+        chev.setImageResource(R.drawable.ic_chevron);
+        chev.setColorFilter(Ui.alpha(getColor(R.color.dim), 0.7f));
+        card.addView(chev, new LinearLayout.LayoutParams(Ui.dp(this, 18), Ui.dp(this, 18)));
+
+        wrap.addView(card, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return wrap;
+    }
+
     private void loadImageThumb(final Entry v, final ImageView target, final ImageView placeholder) {
         target.setTag(v.key());
         pool.execute(new Runnable() {
@@ -968,7 +1065,7 @@ public class MainActivity extends Activity {
 
         @Override
         public int getViewTypeCount() {
-            return 5;
+            return 6;
         }
 
         @Override
@@ -988,6 +1085,7 @@ public class MainActivity extends Activity {
             if (r.type == T_DIR) return dirView(r);
             if (r.type == T_BOOK) return bookView(r.item);
             if (r.type == T_IMAGE) return imageView(r.item);
+            if (r.type == T_ARCHIVE) return archiveView(r.item);
             return itemView(r.item);
         }
     }
