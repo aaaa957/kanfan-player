@@ -1,0 +1,16 @@
+--- a/src/main/cpp/sdl_mixer/dynamic_ogg.c
++++ b/src/main/cpp/sdl_mixer/dynamic_ogg.c
+@@ -77,7 +77,7 @@
+ 			return -1;
+ 		}
+-		vorbis.ov_time_seek =
++		vorbis.ov_time_seek = (int (*)(OggVorbis_File *, double))
+ 			SDL_LoadFunction(vorbis.handle, "ov_time_seek");
+ 		if ( vorbis.ov_time_seek == NULL ) {
+ 			SDL_UnloadObject(vorbis.handle);
+@@ -108,7 +108,7 @@
+-		vorbis.ov_time_seek = ov_time_seek;
++		vorbis.ov_time_seek = (int (*)(OggVorbis_File *, double)) ov_time_seek;
+ 		vorbis.ov_time_seek_page = ov_time_seek_page;
+ 		vorbis.ov_pcm_seek = ov_pcm_seek;
+ 		vorbis.ov_pcm_seek_page = ov_pcm_seek_page;

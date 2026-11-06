@@ -252,7 +252,8 @@
 | 引擎 | 识别特征 | 状态 |
 |---|---|---|
 | **TyranoBuilder**（HTML5） | `index.html` + `tyrano/` 或 `data/` | ✅ 可以直接启动 |
-| **ONS / NScripter** | `*.nsa` / `*.ns2` / `*.sar` / `nscript.dat` / `0.txt` | ⛔ 能认出来，但需要内置 ONScripter 引擎，暂不支持 |
+
+| **ONS / NScripter** | `*.nsa` / `*.ns2` / `*.sar` / `nscript.dat` / `0.txt` | ✅ 可以直接启动（仅 arm64） |
 | **KiriKiri / TVP** | 任意 `*.xp3` | ⛔ 同上，需要 krkrsdl2 |
 
 Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（127.0.0.1），WebView 打开
@@ -263,8 +264,17 @@ Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（
 - 支持 Range 请求，BGM/视频可以拖动
 - 左上角有个半透明 `×`，点它确认退出；返回键先退网页历史，再退游戏
 
-> ONS / KRKR 不是「调一下就能跑」：它们要的是完整原生引擎（ONScripter 或 krkrsdl2 + SDL2），
-> 属于另一个量级的工程，当前版本只做识别与提示。
+**ONS 怎么跑的**：内置 [onscripter-engine-android](https://github.com/matthewn4444/onscripter-engine-android)
+（ONScripter 的 Android fork，GPL-2.0-or-later，支持中日英韩与 UTF-8），用 NDK 编成
+`libonscripter.so`（9.8 MB）+ `libsdl.so`（2.8 MB）：
+
+- 引擎直接拿 `content://` 读 SAF 目录，**游戏不用拷进应用**
+- 存档写回同一个游戏目录，所以那个文件夹需要**写权限**（添加文件夹时已申请）
+- 引擎跑在 `GLSurfaceView` 里，自带触屏映射；左上角 `×` 退出，返回键会先确认
+- 只编了 **arm64**：32 位设备会提示不支持
+
+> KRKR 仍然不行：它的开源实现（krkrsdl2）以桌面为主，开源安卓壳（Tyranor / KiriKiri）都是
+> 完整 App 不是可嵌入的库，要接进来得自己补 TVP 的 Android 层。
 
 ### 下载（磁力 / BT）
 
@@ -324,6 +334,8 @@ Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（
 | `Store.java` | 81 | SharedPreferences：播放位置、阅读进度、字号/背景/阅读方式、已添加目录 |
 | `ZoomView.java` | 192 | 单张图画布：双击/双指缩放、放大后拖动 |
 | `Zip.java` | 717 | zip 读取：中央目录 / ZIP64 / deflate / ZipCrypto / WinZip AES，可跨分卷（纯 Java） |
+| `OnsActivity.java` | 250 | ONS 运行器：托管 ONScripterView、GL 全屏、错误与退出 |
+| `com/onscripter/*` | 2400 | ONScripter 引擎的 Java 层（原样引入，GPL-2.0-or-later） |
 | `TyranoActivity.java` | 250 | Tyrano 运行器：WebView + 全屏 + 退出确认 + 端口选择 |
 | `GameServer.java` | 308 | 只服务一个 SAF 目录的 HTTP 服务：Range、MIME、路径穿越防护、并发缓存 |
 | `GalGame.java` | 120 | 移植版引擎识别（Tyrano/ONS/KRKR），纯 Java |
@@ -406,7 +418,10 @@ libs/jni/arm64-v8a/libjlibtorrent-1.2.0.18.so     # 6.6 MB
 libs/jni/armeabi-v7a/libjlibtorrent-1.2.0.18.so   # 6.2 MB
 ```
 
-构建脚本会把 jar 一起丢给 `d8`，并把 `.so` 塞进 APK 的 `lib/<abi>/`。
+`libs/ons/` 是 ONS 引擎（ONScripter + SDL2）的编译产物，构建步骤与补丁见 `libs/ons/BUILD.md`：
+`libonscripter.so`（9.8 MB）+ `libsdl.so`（2.8 MB），只有 arm64。
+
+构建脚本会把 jar 一起丢给 `d8`，并把所有 `.so` 塞进 APK 的 `lib/<abi>/`。
 原生库必须保留带版本号的文件名——jlibtorrent 先按 `libjlibtorrent-<ver>` 找，找不到才退回 `libjlibtorrent`。
 
 ## 测试
@@ -520,7 +535,8 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - 解压需要目录的**写入**权限：v2.2 之前添加的文件夹只有读权限，需要移除后重新添加一次
 - 看图不支持旋转与「保存为」，GIF 在 Android 8 及以下只能看第一帧
 - 阅读器没有书签与标注
-- Galgame 只支持 TyranoBuilder；ONS / KiriKiri 需要原生引擎，当前只做识别与提示
+- Galgame：Tyrano 与 ONS 可运行（ONS 仅 arm64）；KiriKiri 需要原生引擎，仍只做识别与提示
+- ONS 存档写在游戏目录里，换一个文件夹存档就没了；游戏目录只读时存档会失败
 - Tyrano 只认根目录的 `index.html`；入口在子目录里的自制导出需要手动改结构
 - 下载只支持 magnet 与本地 `.torrent`；不支持 http(s) 种子直链
 - 做种默认关闭；打开后只有 App 进程活着时才上传（杀掉应用即停）
@@ -537,6 +553,9 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 
 本仓库自己的代码是 [MIT](LICENSE)。
 
-但 APK 里打包了 **GPLv3** 的 [jlibtorrent](https://github.com/frostwire/jlibtorrent)
-（libtorrent 的 Java 绑定，`libs/jlibtorrent.jar` + `libs/jni/*/*.so`）——
-所以**分发 APK 时整体按 GPLv3 走**。源码本来就公开，满足它的要求。
+但 APK 里打包了两个 GPL 组件：
+
+- **GPLv3**：[jlibtorrent](https://github.com/frostwire/jlibtorrent)（libtorrent 的 Java 绑定）
+- **GPL-2.0-or-later**：[ONScripter](https://github.com/matthewn4444/onscripter-engine-android)（ONS 引擎）
+
+两者兼容，**分发 APK 时整体按 GPLv3 走**。源码本来就公开，满足它们的要求。

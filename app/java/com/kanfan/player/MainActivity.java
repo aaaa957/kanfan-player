@@ -1407,6 +1407,14 @@ public class MainActivity extends Activity {
             startActivity(it);
             return;
         }
+        if (r.engine == GalGame.ONS) {
+            Intent it = new Intent(this, OnsActivity.class);
+            it.putExtra("tree", r.tree);
+            it.putExtra("rel", r.rel);
+            it.putExtra("name", gameName(r));
+            startActivity(it);
+            return;
+        }
         String msg;
         if (r.engine == GalGame.KRKR) {
             msg = "这是 KiriKiri（KRKR / TVP）移植版。\n\n"
@@ -1414,9 +1422,7 @@ public class MainActivity extends Activity {
                     + "这是个大工程，当前版本还没做。\n\n"
                     + "现在可以用第三方的 Kirikiroid2 打开同一个文件夹。";
         } else {
-            msg = "这是 ONS（NScripter）移植版。\n\n"
-                    + "要直接运行，需要把 ONScripter 引擎编进应用，当前版本还没做。\n\n"
-                    + "现在可以用第三方的 ONS 模拟器打开同一个文件夹。";
+            msg = "这个目录没认出可运行的引擎。";
         }
         new AlertDialog.Builder(this)
                 .setTitle("暂不支持这个引擎")

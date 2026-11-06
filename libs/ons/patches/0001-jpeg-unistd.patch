@@ -1,0 +1,10 @@
+--- a/src/main/cpp/jpeg/jmem-android.c
++++ b/src/main/cpp/jpeg/jmem-android.c
+@@ -17,6 +17,7 @@
+ #include "jinclude.h"
+ #include "jpeglib.h"
+ #include "jmemsys.h"		/* import the system-dependent declarations */
++#include <unistd.h>
+ 
+ /*
+  * Memory allocation and freeing are controlled by the regular library

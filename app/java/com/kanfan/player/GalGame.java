@@ -29,7 +29,7 @@ public final class GalGame {
         public int hits;
 
         public boolean supported() {
-            return engine == TYRANO;
+            return engine == TYRANO || engine == ONS;
         }
 
         public String why() {
@@ -37,7 +37,7 @@ public final class GalGame {
                 case TYRANO:
                     return "TyranoBuilder（网页引擎），可以直接运行";
                 case ONS:
-                    return "ONS（NScripter）——需要内置 ONScripter 引擎，当前版本还跑不了";
+                    return "ONS（NScripter），内置引擎可直接运行（需要 64 位设备）";
                 case KRKR:
                     return "KiriKiri（KRKR/TVP）——需要内置 KiriKiri 引擎，当前版本还跑不了";
                 default:

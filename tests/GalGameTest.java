@@ -56,7 +56,7 @@ public class GalGameTest {
         GalGame.Info o = GalGame.detect(ls(
                 "arc.nsa|0", "nscript.dat|0", "0.txt|0", "ons.txt|0"));
         eq("ons 引擎", o.engine, GalGame.ONS);
-        ok("ons 暂不支持", !o.supported());
+        ok("ons 可运行", o.supported());
         eq("ons 标签", o.label, "ONS");
         ok("ons 命中数", o.hits >= 3);
 

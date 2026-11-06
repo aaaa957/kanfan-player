@@ -134,6 +134,17 @@ with zipfile.ZipFile(os.path.join(out, "unsigned.apk"), "a", zipfile.ZIP_DEFLATE
                 count += 1
     if count == 0:
         print("   （没有原生库，只打 Java 部分）")
+    # ONS 引擎：libs/ons/<abi>/*.so -> lib/<abi>/
+    ons = os.path.join(root, "libs", "ons")
+    if os.path.isdir(ons):
+        for abi in sorted(os.listdir(ons)):
+            d = os.path.join(ons, abi)
+            if not os.path.isdir(d):
+                continue
+            for f in sorted(os.listdir(d)):
+                if f.endswith(".so"):
+                    z.write(os.path.join(d, f), "lib/%s/%s" % (abi, f))
+                    print("   已写入 lib/%s/%s (%.1f MB)" % (abi, f, os.path.getsize(os.path.join(d, f)) / 1048576.0))
     # BT 引擎：libs/jni/<abi>/libjlibtorrent.so -> lib/<abi>/
     jt = os.path.join(root, "libs", "jni")
     if os.path.isdir(jt):

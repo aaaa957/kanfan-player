@@ -183,6 +183,34 @@
 
 ---
 
+## v3.1 — 2026-11-06
+
+### ONS（NScripter）移植版可以真跑了
+
+之前只能识别、给个提示；这一版把引擎编进应用了：
+
+- 引擎：[onscripter-engine-android](https://github.com/matthewn4444/onscripter-engine-android)
+  （ONScripter 的 Android fork，GPL-2.0-or-later，支持中日英韩/UTF-8，修了很多崩溃）
+- 用 NDK r26 + CMake 编成 `libonscripter.so`（9.8 MB）+ `libsdl.so`（2.8 MB，SDL2 也一起编的）
+- Java 层原样引入（`com.onscripter.*`），只补了 3 个 `androidx.annotation` 占位注解
+- 引擎**直接读 content://**：游戏不用拷进应用目录；存档写回游戏目录（需要写权限）
+- 跑在 `GLSurfaceView` 里，触屏/缩放由引擎处理；左上角 `×` 退出、返回键先确认
+- 32 位设备会明确提示「引擎只编了 arm64」
+
+### 代价
+
+- APK **5.9 MB → 10.3 MB**（新增 12.6 MB 的 .so，压缩后约 4.4 MB）
+- 许可证：ONS 是 GPL-2.0-or-later，与本项目已有的 GPLv3 组件兼容，整体仍按 GPLv3
+
+### 验证
+
+- 原生库编译通过，`llvm-nm` 查到 8 个 `Java_com_onscripter_*` JNI 符号，
+  `NEEDED` 只有系统库 + `libsdl.so`
+- 改了引擎源码两处才编过：`jmem-android.c` 缺 `<unistd.h>`、SDL_mixer 的 tremor seek 函数指针类型
+- ⚠️ 真机仍未验：GL 画面、触屏、存档写入都要装机看
+
+---
+
 ## v3.0 — 2026-11-06
 
 ### 新增：Galgame 移植版启动
