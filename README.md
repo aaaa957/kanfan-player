@@ -4,11 +4,11 @@
 
 # 看番 · KanFan
 
-**一个 126 KB 的安卓本地媒体浏览器：视频 + 字幕弹幕 + 电子书 + 图片 + 解压**
+**一个 714 KB 的安卓本地媒体浏览器：视频 + 字幕弹幕 + 电子书 + 图片 + 解压**
 
 纯 Java + 系统原生 API · 零第三方依赖 · 无广告 · 无会员 · 不联网
 
-`Min SDK 23 (Android 6.0)` · `Target SDK 34` · `APK 126 KB`
+`Min SDK 23 (Android 6.0)` · `Target SDK 34` · `APK 714 KB`（含 arm64 + armv7a 原生库）
 
 </div>
 
@@ -186,16 +186,22 @@
 
 | 格式 | 说明 |
 |---|---|
-| `zip`（存储 / deflate） | 完整支持 |
+| `zip`（存储 / deflate，含 ZIP64） | 完整支持，纯 Java |
 | `zip` + 传统加密（ZipCrypto） | 支持，WinRAR / 7-Zip 默认的「ZIP 加密」就是这种 |
 | `zip` + WinZip AES（AE-1 / AE-2，128/192/256） | 支持，会校验 HMAC 与 CRC |
-| `7z` / `rar` | **不支持**，Android 系统没有对应解码器，见下 |
+| `rar` / `rar5`（含加密） | 支持，走原生 unrar，**边解边写盘** |
+| `7z`（LZMA / LZMA2 / BCJ / Delta） | 支持，走 7-Zip 的 C 解码器；**加密的 7z 不支持** |
 
 压缩包里如果所有文件都在同一个顶层目录下，会**自动剥掉这一层**，避免解出「番名/番名/01.mkv」。
 
-> **关于 7z / rar**：这两种格式的压缩算法（LZMA、RAR 专有算法）在 Android SDK 里完全没有实现，
-> 纯 Java 手写一个可靠的解码器不现实（RAR 更是没有公开的完整规范）。
-> 遇到这两种文件，页面会说明原因，并提供「用其他应用打开」把文件交给手机上的文件管理器或解压 App。
+**关于原生库**：7z 与 rar 不是 Java 实现的，而是用 NDK 把
+[7-Zip](https://www.7-zip.org/) 的 C 解码器与 [unrar](https://www.rarlab.com/) 编译成
+`lib/arm64-v8a/libkanfan.so` 与 `lib/armeabi-v7a/libkanfan.so`（约 760 KB / 586 KB）。
+
+- **rar**：走 unrar 的 DLL 接口，**逐个文件解到缓存再搬进目标目录**，不会一次性占两份空间
+- **7z**：走 7-Zip 的 `7zDec.c`，它把整个「固态块」解到内存——**单个文件超过内存就会失败**，
+  同时**不支持加密的 7z**（C 解码器没有 AES 层）
+- 原生库没编进去也能用，只是 7z/rar 会提示「原生库没能加载」，其余功能不受影响
 
 ### 隐私
 
@@ -233,6 +239,7 @@
 | `Store.java` | 81 | SharedPreferences：播放位置、阅读进度、字号/背景/阅读方式、已添加目录 |
 | `ZoomView.java` | 192 | 单张图画布：双击/双指缩放、放大后拖动 |
 | `Zip.java` | 616 | zip 读取：中央目录 / ZIP64 / deflate / ZipCrypto / WinZip AES（纯 Java） |
+| `Nat.java` | 52 | 原生解压的 Java 绑定（rar / 7z） |
 | `Saf.java` | 118 | SAF 写入：建目录、建文件、MIME 推断 |
 | `Swipe.java` | 58 | 翻页判定算术：位移阈值、甩动速度、边缘阻尼（纯 Java） |
 | `Pager.java` | 70 | 分页测量：给定起点算出一页能放多少字（插图不跨页切断） |

@@ -111,14 +111,27 @@ find "$OUT/classes" -name "*.class" > "$OUT/classes.txt"
   > "$OUT/d8.log" 2>&1 || { echo "d8 失败："; head -c 2000 "$OUT/d8.log"; exit 1; }
 [ -f "$OUT/dex/classes.dex" ] || { echo "d8 未产出 classes.dex"; cat "$OUT/d8.log"; exit 1; }
 
-echo "==> 5/6 把 classes.dex 塞进 APK"
-python - "$OUT" <<'PY'
+echo "==> 5/6 把 classes.dex 与原生库塞进 APK"
+python - "$OUT" "$(pwd)" <<'PY'
 import sys, os, shutil, zipfile
 out = sys.argv[1]
+root = sys.argv[2]
 shutil.copyfile(os.path.join(out, "base.apk"), os.path.join(out, "unsigned.apk"))
 with zipfile.ZipFile(os.path.join(out, "unsigned.apk"), "a", zipfile.ZIP_DEFLATED) as z:
     z.write(os.path.join(out, "dex", "classes.dex"), "classes.dex")
-print("   已写入 classes.dex")
+    print("   已写入 classes.dex")
+    # 原生解压库：native/out/<abi>/libkanfan.so -> lib/<abi>/libkanfan.so
+    nat = os.path.join(root, "native", "out")
+    count = 0
+    if os.path.isdir(nat):
+        for abi in sorted(os.listdir(nat)):
+            so = os.path.join(nat, abi, "libkanfan.so")
+            if os.path.isfile(so):
+                z.write(so, "lib/%s/libkanfan.so" % abi)
+                print("   已写入 lib/%s/libkanfan.so (%.0f KB)" % (abi, os.path.getsize(so) / 1024))
+                count += 1
+    if count == 0:
+        print("   （没有原生库，只打 Java 部分）")
 PY
 
 echo "==> 6/6 对齐 + 签名"

@@ -28,6 +28,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -58,6 +59,19 @@ public class ArchiveActivity extends Activity {
     private int fileCount = 0;
     private String password;
     private volatile boolean cancelled;
+
+    /** 0 zip / 1 rar / 2 7z */
+    private int natKind = 0;
+    private String natPath = "";
+    private ParcelFileDescriptor natPfd;
+    private boolean natEncrypted;
+    private final List<Item> items = new ArrayList<Item>();
+
+    static class Item {
+        String name = "";
+        long size;
+        boolean dir;
+    }
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -242,12 +256,12 @@ public class ArchiveActivity extends Activity {
     private final BaseAdapter adapter = new BaseAdapter() {
         @Override
         public int getCount() {
-            return entries.size();
+            return items.size();
         }
 
         @Override
         public Object getItem(int position) {
-            return entries.get(position);
+            return items.get(position);
         }
 
         @Override
@@ -257,7 +271,7 @@ public class ArchiveActivity extends Activity {
 
         @Override
         public View getView(int position, View convert, ViewGroup parent) {
-            Zip.Entry e = entries.get(position);
+            Item e = items.get(position);
             LinearLayout row = new LinearLayout(ArchiveActivity.this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
@@ -265,8 +279,8 @@ public class ArchiveActivity extends Activity {
                     Ui.dp(ArchiveActivity.this, 8), Ui.dp(ArchiveActivity.this, 11));
 
             ImageView ic = new ImageView(ArchiveActivity.this);
-            ic.setImageResource(e.isDirectory() ? R.drawable.ic_folder : R.drawable.ic_archive);
-            ic.setColorFilter(e.isDirectory() ? getColor(R.color.accent)
+            ic.setImageResource(e.dir ? R.drawable.ic_folder : R.drawable.ic_archive);
+            ic.setColorFilter(e.dir ? getColor(R.color.accent)
                     : Ui.alpha(getColor(R.color.dim), 0.9f));
             int is = Ui.dp(ArchiveActivity.this, 16);
             LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(is, is);
@@ -282,7 +296,7 @@ public class ArchiveActivity extends Activity {
             row.addView(t, new LinearLayout.LayoutParams(0,
                     ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-            if (!e.isDirectory()) {
+            if (!e.dir) {
                 TextView sz = new TextView(ArchiveActivity.this);
                 sz.setText(Ui.fmtSize(e.size));
                 sz.setTextColor(getColor(R.color.dim));
@@ -297,6 +311,20 @@ public class ArchiveActivity extends Activity {
     // ---------------- 读取 ----------------
 
     private void startLoad() {
+        String low = name.toLowerCase(Locale.US);
+        if (low.endsWith(".rar")) natKind = 1;
+        else if (low.endsWith(".7z")) natKind = 2;
+        else natKind = 0;
+
+        if (natKind != 0) {
+            if (!Nat.ok()) {
+                onLoaded(null, "原生库没能加载");
+                return;
+            }
+            startLoadNative();
+            return;
+        }
+
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -333,24 +361,98 @@ public class ArchiveActivity extends Activity {
         zip = z;
         entries.clear();
         entries.addAll(zip.entries);
+        items.clear();
+        for (Zip.Entry e : zip.entries) {
+            Item it = new Item();
+            it.name = e.name;
+            it.size = e.size;
+            it.dir = e.isDirectory();
+            items.add(it);
+        }
+        publish();
+    }
+
+    /** 统一刷新头部统计 */
+    private void publish() {
         fileCount = 0;
         long total = 0;
-        for (Zip.Entry e : zip.entries) {
-            if (e.isDirectory()) continue;
+        for (Item it : items) {
+            if (it.dir) continue;
             fileCount++;
-            total += e.size;
+            total += it.size;
         }
         adapter.notifyDataSetChanged();
 
-        String extra = zip.needsPassword() ? " · 已加密" : "";
+        boolean enc = natKind == 0 ? (zip != null && zip.needsPassword()) : natEncrypted;
+        String extra = (enc && natKind != 2) ? " · 已加密" : "";
         subView.setText(String.format(Locale.US, "%d 个文件 · %s%s",
                 fileCount, Ui.fmtSize(total), extra));
-        extractBtn.setEnabled(true);
-        if (fileCount == 0) {
-            extractBtn.setEnabled(false);
-            tipView.setVisibility(View.VISIBLE);
-            tipView.setText("这个压缩包里没有文件");
+        extractBtn.setEnabled(fileCount > 0);
+        tipView.setVisibility(fileCount > 0 ? View.GONE : View.VISIBLE);
+        if (fileCount == 0) tipView.setText("这个压缩包里没有文件");
+    }
+
+    private void startLoadNative() {
+        subView.setText("正在读取…");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String res;
+                try {
+                    ParcelFileDescriptor pfd = getContentResolver()
+                            .openFileDescriptor(Uri.parse(uriStr), "r");
+                    if (pfd == null) {
+                        res = "EOPEN";
+                    } else {
+                        natPfd = pfd;
+                        natPath = "/proc/self/fd/" + pfd.getFd();
+                        res = natKind == 1 ? Nat.rarList(natPath, "") : Nat.szList(natPath);
+                    }
+                } catch (Throwable t) {
+                    res = "EOPEN";
+                }
+                final String r = res;
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        onNativeLoaded(r);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void onNativeLoaded(String res) {
+        if (isFinishing()) return;
+        if (res == null || !res.startsWith("OK\n")) {
+            subView.setText("");
+            showUnsupported(res == null ? "读不出来" : res);
+            return;
         }
+        items.clear();
+        natEncrypted = false;
+        String[] lines = res.split("\n");
+        int need = natKind == 1 ? 4 : 3;
+        for (int i = 1; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.length() == 0) continue;
+            String[] f = line.split("\t", need);
+            if (f.length < need) continue;
+            Item it = new Item();
+            try {
+                it.size = Long.parseLong(f[0]);
+            } catch (Exception ignored) {
+            }
+            it.dir = "1".equals(f[1]);
+            if (natKind == 1) {
+                if ("1".equals(f[2])) natEncrypted = true;
+                it.name = f[3];
+            } else {
+                it.name = f[2];
+            }
+            items.add(it);
+        }
+        publish();
     }
 
     /** 不是 zip，或者打不开 */
@@ -363,6 +465,7 @@ public class ArchiveActivity extends Activity {
         String low = name.toLowerCase(Locale.US);
         boolean sevenZ = low.endsWith(".7z");
         boolean rar = low.endsWith(".rar");
+        String reason = natReason(err);
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
@@ -374,7 +477,7 @@ public class ArchiveActivity extends Activity {
         h.setTextSize(16f);
         h.setTypeface(Typeface.DEFAULT_BOLD);
         h.setGravity(Gravity.CENTER);
-        h.setText(sevenZ ? "7z 需要额外的解码器" : (rar ? "rar 需要额外的解码器" : "打不开这个压缩包"));
+        h.setText("打不开这个压缩包");
         col.addView(h);
 
         TextView d = new TextView(this);
@@ -383,14 +486,7 @@ public class ArchiveActivity extends Activity {
         d.setGravity(Gravity.CENTER);
         d.setLineSpacing(0, 1.5f);
         d.setPadding(0, Ui.dp(this, 12), 0, 0);
-        if (sevenZ || rar) {
-            d.setText("Android 系统里没有 " + (sevenZ ? "7z" : "rar") + " 的解码器，"
-                    + "这个格式没法在应用内解开。\n\n"
-                    + "可以试试点下面的按钮，交给手机上的文件管理器或解压 App 处理；\n"
-                    + "也可以先改成 zip 再传过来。");
-        } else {
-            d.setText("可能是文件损坏，或者不是标准 zip。\n" + (err == null ? "" : err));
-        }
+        d.setText(reason);
         col.addView(d);
 
         TextView open = new TextView(this);
@@ -418,6 +514,32 @@ public class ArchiveActivity extends Activity {
                 Gravity.CENTER));
     }
 
+    /** 把原生返回的 E 码翻译成人话 */
+    private String natReason(String err) {
+        String tail = "\n\n可以点下面的按钮交给其他应用处理。";
+        if (err == null) return "读不出来。" + tail;
+        if (err.startsWith("E")) {
+            String code = err.substring(1);
+            int n = -1;
+            try {
+                n = Integer.parseInt(code);
+            } catch (Exception ignored) {
+            }
+            if (natKind == 1) {
+                if (n == 13) return "这不是有效的 rar，或者文件不完整。" + tail;
+                if (n == 15) return "打不开这个文件（可能没有读取权限）。" + tail;
+                if (n == 25) return "这个 rar 用了超出设备内存的字典，解不开。" + tail;
+            } else if (natKind == 2) {
+                if (n == 1) return "这不是有效的 7z。" + tail;
+                if (n == 2) return "7z 数据损坏。" + tail;
+                if (n == 3) return "这个 7z 用了不支持的压缩方法——**加密的 7z 目前解不了**。" + tail;
+                if (n == 5) return "7z 校验失败，文件可能损坏。" + tail;
+            }
+            return "解压引擎报错（" + err + "）。" + tail;
+        }
+        return "这个压缩包读不出来：" + err + tail;
+    }
+
     private void openWithOther() {
         try {
             Intent i = new Intent(Intent.ACTION_VIEW);
@@ -432,8 +554,12 @@ public class ArchiveActivity extends Activity {
     // ---------------- 解压流程 ----------------
 
     private void startFlow() {
-        if (zip == null) return;
-        if (zip.needsPassword() && password == null) {
+        if (natKind == 0 && zip == null) return;
+        if (natKind != 0 && items.isEmpty()) return;
+        boolean needPwd = natKind == 0
+                ? (zip != null && zip.needsPassword())
+                : (natKind == 1 && natEncrypted);
+        if (needPwd && password == null) {
             askPassword();
             return;
         }
@@ -460,6 +586,11 @@ public class ArchiveActivity extends Activity {
                 .setPositiveButton("确定", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface d, int which) {
+                        if (natKind == 1) {
+                            password = input.getText().toString();
+                            askDestination();
+                            return;
+                        }
                         checkPassword(input.getText().toString());
                     }
                 })
@@ -526,6 +657,10 @@ public class ArchiveActivity extends Activity {
     }
 
     private void beginExtract(final boolean toSubFolder) {
+        if (natKind != 0) {
+            beginExtractNative(toSubFolder);
+            return;
+        }
         cancelled = false;
         progressLayer.setVisibility(View.VISIBLE);
         progressTitle.setText("正在解压");
@@ -635,6 +770,168 @@ public class ArchiveActivity extends Activity {
         }).start();
     }
 
+    // ---------------- 原生解压（rar / 7z） ----------------
+
+    private void beginExtractNative(final boolean intoFolder) {
+        cancelled = false;
+        progressLayer.setVisibility(View.VISIBLE);
+        progressTitle.setText("正在解压");
+        progressFile.setText("");
+        bar.setMax(Math.max(1, fileCount));
+        bar.setProgress(0);
+        extractBtn.setEnabled(false);
+
+        final ContentResolver cr = getContentResolver();
+        final Uri tree = Uri.parse(treeUri);
+        final Uri parent = Saf.parentDocument(tree, Uri.parse(uriStr));
+        final String root = commonRoot();
+        final String pwd = password == null ? "" : password;
+        final String folderName = baseName();
+        final File tmpDir = new File(getCacheDir(), "kf_tmp");
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Uri dest = parent;
+                if (intoFolder) {
+                    try {
+                        dest = Saf.ensureDir(cr, tree, parent, folderName);
+                    } catch (Exception e) {
+                        postFail("没有写入权限，或者建不了文件夹");
+                        return;
+                    }
+                }
+                tmpDir.mkdirs();
+                final int[] done = {0};
+                final String[] err = {null};
+
+                if (natKind == 1) {
+                    final Uri fdest = dest;
+                    Nat.Sink sink = new Nat.Sink() {
+                        @Override
+                        public void onEntry(int index, long size, String nm, String tmpFile) {
+                            try {
+                                copyEntry(cr, tree, fdest, root, nm, tmpFile);
+                                done[0]++;
+                                final int d = done[0];
+                                final String shown = nm;
+                                ui.post(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        bar.setProgress(d);
+                                        progressFile.setText(shown);
+                                    }
+                                });
+                            } catch (Exception ex) {
+                                if (err[0] == null) {
+                                    err[0] = ex.getMessage() == null ? "写入失败" : ex.getMessage();
+                                }
+                            }
+                            new File(tmpFile).delete();
+                        }
+
+                        @Override
+                        public void onProgress(long bytes) {
+                        }
+                    };
+                    int rc = Nat.rarExtractAll(natPath, pwd, tmpDir.getAbsolutePath(), sink);
+                    if (rc == 24 || rc == 22) {
+                        err[0] = "密码不对";
+                    } else if (rc != 0 && err[0] == null) {
+                        err[0] = "rar 解压失败（错误码 " + rc + "）";
+                    }
+                } else {
+                    for (int i = 0; i < items.size(); i++) {
+                        if (cancelled) break;
+                        Item it = items.get(i);
+                        if (it.dir) continue;
+                        File tmp = new File(tmpDir, "kf_" + i);
+                        int rc = Nat.szExtractOne(natPath, i, tmp.getAbsolutePath());
+                        if (rc != 0) {
+                            if (err[0] == null) {
+                                err[0] = rc == 3
+                                        ? "这个 7z 用了加密，C 解码器不支持"
+                                        : ("7z 解压失败（错误码 " + rc + "）");
+                            }
+                            tmp.delete();
+                            continue;
+                        }
+                        try {
+                            copyEntry(cr, tree, dest, root, it.name, tmp.getAbsolutePath());
+                            done[0]++;
+                        } catch (Exception ex) {
+                            if (err[0] == null) {
+                                err[0] = ex.getMessage() == null ? "写入失败" : ex.getMessage();
+                            }
+                        }
+                        tmp.delete();
+                        final int d = done[0];
+                        final String shown = it.name;
+                        ui.post(new Runnable() {
+                            @Override
+                            public void run() {
+                                bar.setProgress(d);
+                                progressFile.setText(shown);
+                            }
+                        });
+                    }
+                }
+
+                if (natKind == 2) {
+                    try {
+                        Nat.szClose();
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                final int fd = done[0];
+                final String fe = err[0];
+                final boolean cn = cancelled;
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        finishExtract(fd, fe == null ? 0 : 1, fe, cn, intoFolder, folderName);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** 把一个解出来的临时文件搬进目标目录 */
+    private void copyEntry(ContentResolver cr, Uri tree, Uri destRoot, String root,
+                           String entryName, String tmpFile) throws Exception {
+        String rel = entryName.replace('\\', '/');
+        if (!root.isEmpty() && rel.startsWith(root + "/")) {
+            rel = rel.substring(root.length() + 1);
+        }
+        int slash = rel.lastIndexOf('/');
+        String dirPath = slash < 0 ? "" : rel.substring(0, slash);
+        String fileName = slash < 0 ? rel : rel.substring(slash + 1);
+        if (fileName.isEmpty()) return;
+
+        Uri dir = destRoot;
+        if (dirPath.length() > 0) {
+            for (String seg : dirPath.split("/")) {
+                if (seg.isEmpty() || seg.equals(".")) continue;
+                dir = Saf.ensureDir(cr, tree, dir, seg);
+            }
+        }
+        Uri out = Saf.createFile(cr, tree, dir, fileName);
+        OutputStream os = Saf.openOut(cr, out);
+        FileInputStream in = new FileInputStream(tmpFile);
+        try {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+        } finally {
+            try {
+                in.close();
+            } catch (Exception ignored) {
+            }
+            os.close();
+        }
+    }
+
     private void postFail(final String msg) {
         ui.post(new Runnable() {
             @Override
@@ -689,11 +986,9 @@ public class ArchiveActivity extends Activity {
     /** 压缩包里如果所有文件都在同一个顶层目录下，就把它剥掉，避免「番名/番名/01.mkv」 */
     private String commonRoot() {
         String root = null;
-        for (Zip.Entry e : zip.entries) {
-            String n = e.name.replace('\\', '/');
-            if (e.isDirectory()) {
-                if (n.endsWith("/")) n = n.substring(0, n.length() - 1);
-            }
+        for (Item it : items) {
+            String n = it.name.replace('\\', '/');
+            if (it.dir && n.endsWith("/")) n = n.substring(0, n.length() - 1);
             if (n.isEmpty()) continue;
             int p = n.indexOf('/');
             if (p < 0) return "";
@@ -718,6 +1013,19 @@ public class ArchiveActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         cancelled = true;
+        if (natKind == 2 && Nat.ok()) {
+            try {
+                Nat.szClose();
+            } catch (Throwable ignored) {
+            }
+        }
+        if (natPfd != null) {
+            try {
+                natPfd.close();
+            } catch (Exception ignored) {
+            }
+            natPfd = null;
+        }
         if (zip != null) {
             final Zip z = zip;
             zip = null;

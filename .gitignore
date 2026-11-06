@@ -29,3 +29,6 @@ desktop.ini
 # 日志与临时文件
 *.log
 *.tmp
+
+# 原生库构建产物（体积大，随 APK 发布）
+native/out/
