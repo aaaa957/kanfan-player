@@ -183,6 +183,29 @@
 
 ---
 
+## v3.3 — 2026-11-07
+
+### KRKR 插件预检
+
+Kirikiroid2 的汉化移植版普遍会 `Plugins.link("krmovie.dll")` 之类，而 krkrsdl2 只内置 7 个插件
+（`extrans / wutcwf / wuvorbis / fstat / json / varfile / krglhwebp`）。缺插件时原来的表现是黑屏或一句 TJS 报错。
+
+现在启动前会扫一遍导入目录（`.tjs / .ks / .csv / .txt`，单文件 ≤1 MB、最多 400 个）：
+
+- 列出缺哪些插件，并逐个说明后果（`krmovie` → OP 视频播不了；`layerExSave` → 存档缩略图失败…）
+- 内置支持的也列出来，便于对照
+- 给「仍然启动 / 取消」，不再对着黑屏猜
+
+> 只能预检、不能补齐：`krmovie`（DirectShow）、`menu`、`windowEx` 这些是 Windows 原生 DLL，
+> Android 上没有对应实现；要真补，得一个一个用 SDL 重写，属于另一个工程。
+
+### 测试
+
+新增 `KrkrCompatTest` 22 项（各种 `Plugins.link` 写法、路径归一、内置/缺失分类、
+目录扫描、忽略非脚本、空目录），合计 **396 项**。
+
+---
+
 ## v3.2 — 2026-11-07
 
 ### KiriKiri（KRKR / TVP）也能跑了

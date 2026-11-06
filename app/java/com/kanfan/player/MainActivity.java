@@ -1467,7 +1467,37 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private void startKrkr(File dir) {
+    /** 启动前先扫一遍插件依赖，缺什么先说明白，别让用户对着黑屏猜 */
+    private void startKrkr(final File dir) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final KrkrCompat.Report r = KrkrCompat.scanDir(dir);
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (r.hasProblem()) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setTitle("插件不完全支持")
+                                    .setMessage(KrkrCompat.describe(r))
+                                    .setNegativeButton("取消", null)
+                                    .setPositiveButton("仍然启动", new DialogInterface.OnClickListener() {
+                                        @Override
+                                        public void onClick(DialogInterface d, int w) {
+                                            startKrkrNow(dir);
+                                        }
+                                    })
+                                    .show();
+                        } else {
+                            startKrkrNow(dir);
+                        }
+                    }
+                });
+            }
+        }, "krkr-preflight").start();
+    }
+
+    private void startKrkrNow(File dir) {
         Intent it = new Intent(this, KrkrActivity.class);
         it.putExtra("path", dir.getAbsolutePath());
         startActivity(it);

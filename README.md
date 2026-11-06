@@ -282,6 +282,12 @@ Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（
 - 复制量等于游戏大小（几百 MB 到几 GB），会占双份空间——这是 KRKR 的硬约束，没办法绕
 - 存档写在导入目录里（`savedata/`），删掉导入目录等于删档
 
+**插件预检**：Kirikiroid2 的汉化移植版常在 `startup.tjs` 里 `Plugins.link("xxx.dll")`。
+krkrsdl2 只内置 7 个（`extrans / wutcwf / wuvorbis / fstat / json / varfile / krglhwebp`），
+其余（`krmovie`、`menu`、`windowEx`、`layerExSave`、`saveStruct`、`csvParser`…）在 Android 上根本没有。
+启动前会扫一遍导入目录里的 `.tjs / .ks / .csv / .txt`，把「缺哪些、各自会导致什么」列出来，
+再让你决定「仍然启动 / 取消」——不至于对着一片黑屏猜。
+
 ### 下载（磁力 / BT）
 
 顶部「下载」进下载页：贴 `magnet:` 链接点「添加」，或者选一个本地 `.torrent` 文件。
@@ -341,6 +347,7 @@ Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（
 | `ZoomView.java` | 192 | 单张图画布：双击/双指缩放、放大后拖动 |
 | `Zip.java` | 717 | zip 读取：中央目录 / ZIP64 / deflate / ZipCrypto / WinZip AES，可跨分卷（纯 Java） |
 | `KrkrActivity.java` | 30 | KiriKiri 运行器：继承 SDLActivity，把导入目录传给 native |
+| `KrkrCompat.java` | 190 | KRKR 插件预检：解析 Plugins.link、内置/缺失分类与后果说明 |
 | `GameImport.java` | 130 | SAF → 应用目录的递归复制（带进度/取消），KRKR 用 |
 | `org/libsdl/app/*` | 4300 | SDL2 官方 Android 胶水层（原样引入） |
 | `OnsActivity.java` | 250 | ONS 运行器：托管 ONScripterView、GL 全屏、错误与退出 |
@@ -452,6 +459,9 @@ javac -d out/tests \
   app/java/com/kanfan/player/Vols.java \
   app/java/com/kanfan/player/Zip.java \
   app/java/com/kanfan/player/ZipWrite.java \
+  app/java/com/kanfan/player/PdfLayout.java \
+  app/java/com/kanfan/player/GalGame.java \
+  app/java/com/kanfan/player/KrkrCompat.java \
   tests/*.java
 
 java -cp out/tests NavTest      # 目录折叠
@@ -467,9 +477,10 @@ java -cp out/tests ZipVolTest   # 分卷 zip：现场切卷，跨卷读、缺卷
 java -cp out/tests ZipWriteTest # 压缩：存储/deflate/Zip64/UTF-8 名/取消，产物交给 7z t
 java -cp out/tests PdfLayoutTest # PDF 排版：页偏移、可视范围、缩放焦点、平移夹取
 java -cp out/tests GalGameTest    # 移植版引擎识别：Tyrano / ONS / KRKR
+java -cp out/tests KrkrCompatTest # KRKR 插件预检：Plugins.link 解析与缺失分类
 ```
 
-**374 项用例**，目前全部通过：
+**396 项用例**，目前全部通过：
 
 | 用例 | 数量 | 重点覆盖 |
 |---|---:|---|
@@ -484,6 +495,7 @@ java -cp out/tests GalGameTest    # 移植版引擎识别：Tyrano / ONS / KRKR
 | `VolsTest` | 33 | 新式/旧式 rar、`.z01` 分卷、7-Zip 切卷的归组与排序；`part10` 按数值排；缺卷提示 |
 | `ZipVolTest` | 8 | 把完整 zip 切成 2/3 卷（切点故意不对齐）后跨卷读；少一卷必须报错 |
 | `ZipWriteTest` | 26 | 写出来的包交给 `7z t` 校验；deflate/store、Zip64、未知大小、两万条目、取消 |
+| `KrkrCompatTest` | 22 | `Plugins.link` 各种写法、路径归一、内置/缺失分类、目录扫描与忽略非脚本 |
 | `GalGameTest` | 21 | Tyrano 目录结构、ONS 各文件名、KRKR 的 xp3、大小写、裸 index.html 不误判 |
 | `PdfLayoutTest` | 41 | 页偏移与总高、可视范围二分、缩放焦点保持、平移夹取、空/坏页不崩 |
 
@@ -549,6 +561,8 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - 阅读器没有书签与标注
 - Galgame：Tyrano、ONS、KRKR 都可运行（后两者仅 arm64）
 - KRKR 首次启动要复制整个游戏目录，占双份空间；复制中途退出会清掉半成品
+- KRKR 插件只能预检、不能补齐：缺 `krmovie`（OP 视频）、`menu`、`layerExSave` 等的游戏仍可能黑屏
+- 预检只扫未打包的脚本；脚本全在 `data.xp3` 里的游戏扫不到，会直接启动
 - ONS 存档写在游戏目录里，换一个文件夹存档就没了；游戏目录只读时存档会失败
 - Tyrano 只认根目录的 `index.html`；入口在子目录里的自制导出需要手动改结构
 - 下载只支持 magnet 与本地 `.torrent`；不支持 http(s) 种子直链
