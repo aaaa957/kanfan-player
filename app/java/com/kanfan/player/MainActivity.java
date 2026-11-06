@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -30,6 +31,7 @@ import android.widget.Toast;
 
 import android.media.MediaMetadataRetriever;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -51,7 +53,7 @@ public class MainActivity extends Activity {
     private static final String KEY_TREES = "trees";        // 旧格式：StringSet（无序）
     private static final String KEY_ORDER = "trees_order";  // 新格式：按行存储，保留顺序
 
-    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3;
+    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3, T_IMAGE = 4;
 
     private ListView list;
     private TextView subtitle, manageBtn, addBtn, titleView;
@@ -75,7 +77,7 @@ public class MainActivity extends Activity {
 
     private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final LruCache<String, Bitmap> thumbs = new LruCache<String, Bitmap>(60) {
+    private final LruCache<String, Bitmap> thumbs = new LruCache<String, Bitmap>(4 * 1024) {
         @Override
         protected int sizeOf(String k, Bitmap v) {
             return Math.max(1, v.getByteCount() / 1024);
@@ -390,6 +392,8 @@ public class MainActivity extends Activity {
                     open(r.item);
                 } else if (r.type == T_BOOK && r.item != null) {
                     read(r.item);
+                } else if (r.type == T_IMAGE && r.item != null) {
+                    openImage(r.item);
                 }
             }
         });
@@ -589,11 +593,12 @@ public class MainActivity extends Activity {
     private void buildRootRows() {
         for (int i = 0; i < folders.size(); i++) {
             String[] f = folders.get(i);
-            int videos = 0, books = 0;
+            int videos = 0, books = 0, images = 0;
             long size = 0;
             for (Entry v : all) {
                 if (!f[0].equals(v.tree)) continue;
                 if (v.isBook()) books++;
+                else if (v.isImage()) images++;
                 else videos++;
                 size += v.size;
             }
@@ -604,18 +609,22 @@ public class MainActivity extends Activity {
             r.label = f[1];
             r.tree = f[0];
             r.rel = "";
-            r.sub = subText(videos, books, size);
+            r.sub = subText(videos, books, images, size);
             rows.add(r);
         }
     }
 
     /** 「52 个视频 · 3 本 · 13.4 GB」这样的副标题 */
-    private String subText(int videos, int books, long size) {
+    private String subText(int videos, int books, int images, long size) {
         StringBuilder sb = new StringBuilder();
         if (videos > 0) sb.append(videos).append(" 个视频");
         if (books > 0) {
             if (sb.length() > 0) sb.append(" · ");
             sb.append(books).append(" 本");
+        }
+        if (images > 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(images).append(" 张图");
         }
         if (sb.length() == 0) return "空文件夹";
         return sb.append(" · ").append(sizeText(size)).toString();
@@ -657,16 +666,18 @@ public class MainActivity extends Activity {
                 r.label = d.name;
                 r.tree = cur.tree;
                 r.rel = d.rel;
-                r.sub = subText(d.videoCount, d.bookCount, d.size);
+                r.sub = subText(d.videoCount, d.bookCount, d.imageCount, d.size);
                 rows.add(r);
             }
         }
 
         List<Entry> videos = new ArrayList<>();
         List<Entry> books = new ArrayList<>();
+        List<Entry> pics = new ArrayList<>();
         for (int idx : Nav.directOf(cur.rel, rels)) {
             Entry e = scoped.get(idx);
             if (e.isBook()) books.add(e);
+            else if (e.isImage()) pics.add(e);
             else videos.add(e);
         }
         java.util.Comparator<Entry> byTitle = new java.util.Comparator<Entry>() {
@@ -677,6 +688,7 @@ public class MainActivity extends Activity {
         };
         Collections.sort(videos, byTitle);
         Collections.sort(books, byTitle);
+        Collections.sort(pics, byTitle);
 
         if (!videos.isEmpty()) {
             Row h = new Row();
@@ -700,6 +712,19 @@ public class MainActivity extends Activity {
                 Row r = new Row();
                 r.type = T_BOOK;
                 r.item = b;
+                rows.add(r);
+            }
+        }
+
+        if (!pics.isEmpty()) {
+            Row h = new Row();
+            h.type = T_HEADER;
+            h.label = "图片";
+            rows.add(h);
+            for (Entry im : pics) {
+                Row r = new Row();
+                r.type = T_IMAGE;
+                r.item = im;
                 rows.add(r);
             }
         }
@@ -730,17 +755,18 @@ public class MainActivity extends Activity {
             return;
         }
         long size = 0;
-        int videos = 0, books = 0;
+        int videos = 0, books = 0, images = 0;
         if (stack.isEmpty()) {
             titleView.setText("看番");
             for (Entry v : all) {
                 size += v.size;
                 if (v.isBook()) books++;
+                else if (v.isImage()) images++;
                 else videos++;
             }
             if (folders.isEmpty()) subtitle.setText("还没有添加文件夹");
             else {
-                String cnt = subText(videos, books, size);
+                String cnt = subText(videos, books, images, size);
                 subtitle.setText(String.format(Locale.US, "%d 个文件夹 · %s",
                         folders.size(), cnt));
             }
@@ -751,11 +777,12 @@ public class MainActivity extends Activity {
         for (Entry v : all) {
             if (cur.tree.equals(v.tree) && Nav.under(v.relPath, cur.rel)) {
                 if (v.isBook()) books++;
+                else if (v.isImage()) images++;
                 else videos++;
                 size += v.size;
             }
         }
-        subtitle.setText(subText(videos, books, size));
+        subtitle.setText(subText(videos, books, images, size));
     }
 
     private void goUp() {
@@ -802,6 +829,125 @@ public class MainActivity extends Activity {
         startActivity(it);
     }
 
+    private void openImage(Entry v) {
+        Intent it = new Intent(this, ImageActivity.class);
+        it.putExtra("uri", v.uri.toString());
+        it.putExtra("name", v.name);
+        it.putExtra("tree", v.tree);
+        it.putExtra("rel", v.relPath);
+        startActivity(it);
+    }
+
+    /** 图片行：方形缩略图 + 文件名 + 体积 */
+    private View imageView(final Entry v) {
+        int pad = Ui.dp(this, 5);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(0, 0, 0, pad);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 12), Ui.dp(this, 9));
+        card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        FrameLayout box = new FrameLayout(this);
+        box.setBackground(Ui.round(this, getColor(R.color.surface2), 10f));
+        box.setClipToOutline(true);
+        ImageView img = new ImageView(this);
+        img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        box.addView(img, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        ImageView ph = new ImageView(this);
+        ph.setImageResource(R.drawable.ic_image);
+        ph.setColorFilter(Ui.alpha(getColor(R.color.dim), 0.6f));
+        int ps = Ui.dp(this, 22);
+        box.addView(ph, new FrameLayout.LayoutParams(ps, ps, Gravity.CENTER));
+
+        int side = Ui.dp(this, 56);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(side, side);
+        blp.setMargins(0, 0, Ui.dp(this, 12), 0);
+        card.addView(box, blp);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        card.addView(col, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView name = new TextView(this);
+        name.setText(v.title);
+        name.setTextColor(getColor(R.color.text));
+        name.setTextSize(14.5f);
+        name.setMaxLines(2);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        col.addView(name);
+
+        TextView meta = new TextView(this);
+        String ext = v.name.contains(".")
+                ? v.name.substring(v.name.lastIndexOf('.') + 1).toUpperCase(Locale.US) : "图片";
+        meta.setText(ext + " · " + Ui.fmtSize(v.size));
+        meta.setTextColor(getColor(R.color.dim));
+        meta.setTextSize(11.5f);
+        meta.setPadding(0, Ui.dp(this, 4), 0, 0);
+        col.addView(meta);
+
+        wrap.addView(card, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        Bitmap cached = thumbs.get(v.key());
+        if (cached != null) {
+            img.setImageBitmap(cached);
+            ph.setVisibility(View.GONE);
+        } else {
+            img.setImageDrawable(null);
+            loadImageThumb(v, img, ph);
+        }
+        return wrap;
+    }
+
+    private void loadImageThumb(final Entry v, final ImageView target, final ImageView placeholder) {
+        target.setTag(v.key());
+        pool.execute(new Runnable() {
+            @Override
+            public void run() {
+                Bitmap bm = null;
+                try {
+                    int size = Ui.dp(MainActivity.this, 56);
+                    InputStream in = getContentResolver().openInputStream(v.uri);
+                    BitmapFactory.Options probe = new BitmapFactory.Options();
+                    probe.inJustDecodeBounds = true;
+                    BitmapFactory.decodeStream(in, null, probe);
+                    if (in != null) in.close();
+                    if (probe.outWidth <= 0) return;
+                    int sample = 1;
+                    while (probe.outWidth / (sample * 2) >= size
+                            || probe.outHeight / (sample * 2) >= size) {
+                        sample *= 2;
+                    }
+                    BitmapFactory.Options o = new BitmapFactory.Options();
+                    o.inSampleSize = sample;
+                    in = getContentResolver().openInputStream(v.uri);
+                    bm = BitmapFactory.decodeStream(in, null, o);
+                    if (in != null) in.close();
+                } catch (Throwable ignored) {
+                }
+                if (bm == null) return;
+                bm = centerCrop(bm, Ui.dp(MainActivity.this, 56), Ui.dp(MainActivity.this, 56));
+                thumbs.put(v.key(), bm);
+                final Bitmap fb = bm;
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (v.key().equals(target.getTag())) {
+                            target.setImageBitmap(fb);
+                            placeholder.setVisibility(View.GONE);
+                        }
+                    }
+                });
+            }
+        });
+    }
+
     // ---------------- Adapter ----------------
 
     private class Adapter extends BaseAdapter {
@@ -822,7 +968,7 @@ public class MainActivity extends Activity {
 
         @Override
         public int getViewTypeCount() {
-            return 4;
+            return 5;
         }
 
         @Override
@@ -841,6 +987,7 @@ public class MainActivity extends Activity {
             if (r.type == T_HEADER) return headerView(r);
             if (r.type == T_DIR) return dirView(r);
             if (r.type == T_BOOK) return bookView(r.item);
+            if (r.type == T_IMAGE) return imageView(r.item);
             return itemView(r.item);
         }
     }

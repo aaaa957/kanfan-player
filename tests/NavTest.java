@@ -67,6 +67,14 @@ public class NavTest {
         check("不传 kinds/视频数", d5.get(0).videoCount, 2);
         check("不传 kinds/书籍数", d5.get(0).bookCount, 0);
 
+        // 图片单独计数（kind=2）
+        int[] threeKinds = {0, 1, 2};
+        List<Nav.Dir> d6 = Nav.subdirsOf("", new String[]{"A", "A", "A"},
+                new long[]{1, 2, 3}, threeKinds);
+        check("三类/A 视频", d6.get(0).videoCount, 1);
+        check("三类/A 书籍", d6.get(0).bookCount, 1);
+        check("三类/A 图片", d6.get(0).imageCount, 1);
+
         // 6) 空输入不炸
         check("空输入/子目录", Nav.subdirsOf("", new String[0], new long[0]).size(), 0);
         check("空输入/直属", Nav.directOf("", null).length, 0);

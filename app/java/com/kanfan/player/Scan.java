@@ -35,11 +35,24 @@ public class Scan {
 
     private static final String[] BOOK_EXT = {".txt", ".epub"};
 
+    private static final String[] IMAGE_EXT = {
+            ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif", ".avif"
+    };
+
     public static boolean isVideo(String name, String mime) {
         if (mime != null && mime.toLowerCase(Locale.US).startsWith("video/")) return true;
         if (name == null) return false;
         String n = name.toLowerCase(Locale.US);
         for (String e : VIDEO_EXT) {
+            if (n.endsWith(e)) return true;
+        }
+        return false;
+    }
+
+    public static boolean isImage(String name) {
+        if (name == null) return false;
+        String n = name.toLowerCase(Locale.US);
+        for (String e : IMAGE_EXT) {
             if (n.endsWith(e)) return true;
         }
         return false;
@@ -117,9 +130,11 @@ public class Scan {
                 long size = cur.isNull(iSize) ? 0 : cur.getLong(iSize);
                 if (DIR_MIME.equals(mime)) {
                     dirs.add(new String[]{id, name});
-                } else if (isVideo(name, mime) || isBook(name)) {
+                } else if (isVideo(name, mime) || isBook(name) || isImage(name)) {
                     Entry v = new Entry();
-                    v.kind = isVideo(name, mime) ? Entry.VIDEO : Entry.BOOK;
+                    if (isVideo(name, mime)) v.kind = Entry.VIDEO;
+                    else if (isBook(name)) v.kind = Entry.BOOK;
+                    else v.kind = Entry.IMAGE;
                     v.name = name == null ? "" : name;
                     v.title = Ui.prettyTitle(v.name);
                     v.relPath = rel;

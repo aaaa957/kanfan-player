@@ -7,6 +7,7 @@ public class Entry {
 
     public static final int VIDEO = 0;
     public static final int BOOK = 1;
+    public static final int IMAGE = 2;
 
     public long id;
     public int kind = VIDEO;
@@ -28,5 +29,9 @@ public class Entry {
 
     public boolean isBook() {
         return kind == BOOK;
+    }
+
+    public boolean isImage() {
+        return kind == IMAGE;
     }
 }
