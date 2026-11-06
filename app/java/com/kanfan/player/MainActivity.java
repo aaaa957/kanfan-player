@@ -14,10 +14,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.LruCache;
-import android.util.Size;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.BaseAdapter;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -33,26 +33,36 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * 片库：第一层只列「已添加的文件夹」，点进去才看里面的子文件夹与视频，
+ * 可以逐级返回，避免一个文件夹的内容把首屏塞满。
+ */
 public class MainActivity extends Activity {
 
     private static final int REQ_TREE = 2001;
     private static final String PREF = "kanfan_folders";
     private static final String KEY_TREES = "trees";
 
+    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2;
+
     private ListView list;
-    private TextView subtitle, manageBtn, addBtn;
+    private TextView subtitle, manageBtn, addBtn, titleView;
+    private ImageView backBtn;
     private TextView empty;
     private LinearLayout root;
 
     private final List<Row> rows = new ArrayList<>();
     private final List<VideoItem> all = new ArrayList<>();
     private final List<String[]> folders = new ArrayList<>(); // {uri, name}
+    private final List<Crumb> stack = new ArrayList<>();      // 导航栈，空 = 根层级
     private Adapter adapter;
+    private long lastBack;
 
     private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -63,10 +73,23 @@ public class MainActivity extends Activity {
         }
     };
 
+    /** 一级目录：tree=授权目录，rel=相对路径，name=显示名 */
+    static class Crumb {
+        final String tree, rel, name;
+
+        Crumb(String tree, String rel, String name) {
+            this.tree = tree;
+            this.rel = rel;
+            this.name = name;
+        }
+    }
+
     static class Row {
-        boolean header;
-        String folder;
-        int count;
+        int type;
+        String label;   // 标题 / 文件夹名
+        String sub;     // 文件夹副标题
+        String tree;
+        String rel;
         VideoItem item;
     }
 
@@ -140,6 +163,7 @@ public class MainActivity extends Activity {
         }
         folders.add(new String[]{tree.toString(), name});
         saveFolders();
+        stack.clear();
         rescan();
     }
 
@@ -170,6 +194,7 @@ public class MainActivity extends Activity {
                                         }
                                         folders.remove(idx);
                                         saveFolders();
+                                        stack.clear();
                                         rescan();
                                     }
                                 }).show();
@@ -195,13 +220,32 @@ public class MainActivity extends Activity {
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView title = new TextView(this);
-        title.setText("看番");
-        title.setTextColor(getColor(R.color.text));
-        title.setTextSize(26f);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setLetterSpacing(0.06f);
-        titleRow.addView(title, new LinearLayout.LayoutParams(0,
+        backBtn = new ImageView(this);
+        backBtn.setImageResource(R.drawable.ic_back);
+        backBtn.setColorFilter(getColor(R.color.text));
+        backBtn.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
+        backBtn.setBackground(Ui.circle(this, Ui.alpha(getColor(R.color.text), 0.06f)));
+        backBtn.setVisibility(View.GONE);
+        backBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                goUp();
+            }
+        });
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                Ui.dp(this, 36), Ui.dp(this, 36));
+        blp.setMargins(0, 0, Ui.dp(this, 10), 0);
+        titleRow.addView(backBtn, blp);
+
+        titleView = new TextView(this);
+        titleView.setText("看番");
+        titleView.setTextColor(getColor(R.color.text));
+        titleView.setTextSize(26f);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        titleView.setLetterSpacing(0.06f);
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        titleRow.addView(titleView, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         manageBtn = chip("管理", false);
@@ -213,7 +257,7 @@ public class MainActivity extends Activity {
         });
         LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        mlp.setMargins(0, 0, Ui.dp(this, 8), 0);
+        mlp.setMargins(Ui.dp(this, 8), 0, Ui.dp(this, 8), 0);
         titleRow.addView(manageBtn, mlp);
 
         addBtn = chip("＋ 添加", true);
@@ -242,9 +286,22 @@ public class MainActivity extends Activity {
         list.setSelector(new ColorDrawable(Color.TRANSPARENT));
         list.setVerticalScrollBarEnabled(false);
         list.setClipToPadding(false);
-        list.setPadding(ph, 0, ph, Ui.dp(this, 24));
+        list.setPadding(ph, Ui.dp(this, 4), ph, Ui.dp(this, 24));
         adapter = new Adapter();
         list.setAdapter(adapter);
+        list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
+                Row r = rows.get(position);
+                if (r.type == T_DIR) {
+                    stack.add(new Crumb(r.tree, r.rel, r.label));
+                    rebuildRows();
+                    list.setSelection(0);
+                } else if (r.type == T_VIDEO && r.item != null) {
+                    open(r.item);
+                }
+            }
+        });
         root.addView(list, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -278,7 +335,10 @@ public class MainActivity extends Activity {
     }
 
     private void refreshHeaderState() {
-        manageBtn.setVisibility(folders.isEmpty() ? View.GONE : View.VISIBLE);
+        boolean atRoot = stack.isEmpty();
+        backBtn.setVisibility(atRoot ? View.GONE : View.VISIBLE);
+        addBtn.setVisibility(atRoot ? View.VISIBLE : View.GONE);
+        manageBtn.setVisibility(atRoot && !folders.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
     // ---------------- 扫描 ----------------
@@ -287,8 +347,8 @@ public class MainActivity extends Activity {
         refreshHeaderState();
         if (folders.isEmpty()) {
             all.clear();
+            stack.clear();
             rebuildRows();
-            subtitle.setText("还没有添加文件夹");
             return;
         }
         subtitle.setText("正在扫描…");
@@ -308,6 +368,7 @@ public class MainActivity extends Activity {
                     public void run() {
                         all.clear();
                         all.addAll(found);
+                        pruneStack();
                         rebuildRows();
                         measureDurations();
                     }
@@ -316,9 +377,22 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** 若当前所在目录已不存在（文件夹被移除），退回根层级 */
+    private void pruneStack() {
+        if (stack.isEmpty()) return;
+        String tree = stack.get(0).tree;
+        boolean alive = false;
+        for (String[] f : folders) {
+            if (f[0].equals(tree)) {
+                alive = true;
+                break;
+            }
+        }
+        if (!alive) stack.clear();
+    }
+
     private void measureDurations() {
         if (all.isEmpty()) return;
-        subtitle.setText("正在读取时长…");
         final List<VideoItem> snapshot = new ArrayList<>(all);
         final AtomicInteger done = new AtomicInteger(0);
         final int total = snapshot.size();
@@ -333,7 +407,6 @@ public class MainActivity extends Activity {
                         ui.post(new Runnable() {
                             @Override
                             public void run() {
-                                updateSubtitle();
                                 adapter.notifyDataSetChanged();
                             }
                         });
@@ -343,76 +416,171 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ---------------- 行构建 ----------------
+
     private void rebuildRows() {
         rows.clear();
-        Map<String, List<VideoItem>> groups = new LinkedHashMap<>();
-        for (VideoItem v : all) {
-            List<VideoItem> l = groups.get(v.bucket);
-            if (l == null) {
-                l = new ArrayList<>();
-                groups.put(v.bucket, l);
-            }
-            l.add(v);
-        }
-        List<String> names = new ArrayList<>(groups.keySet());
-        Collections.sort(names, Ui.NATURAL);
-
-        for (String n : names) {
-            List<VideoItem> l = groups.get(n);
-            Collections.sort(l, new java.util.Comparator<VideoItem>() {
-                @Override
-                public int compare(VideoItem a, VideoItem b) {
-                    return Ui.NATURAL.compare(a.title, b.title);
-                }
-            });
-            Row h = new Row();
-            h.header = true;
-            h.folder = n;
-            h.count = l.size();
-            rows.add(h);
-            for (VideoItem v : l) {
-                Row r = new Row();
-                r.item = v;
-                rows.add(r);
-            }
-        }
+        if (stack.isEmpty()) buildRootRows();
+        else buildDirRows();
 
         adapter.notifyDataSetChanged();
         boolean has = !rows.isEmpty();
         list.setVisibility(has ? View.VISIBLE : View.GONE);
         empty.setVisibility(has ? View.GONE : View.VISIBLE);
-        if (!has) {
-            if (folders.isEmpty()) {
-                empty.setText("还没有添加文件夹\n\n点右上角「＋ 添加」，选中存放视频的文件夹（比如 Movies）\n之后这个应用就只看那里，不会再扫相册和截图");
-            } else {
-                empty.setText("这些文件夹里没找到视频文件\n\n支持 mp4 / mkv / avi / ts / mov 等常见格式");
+        if (!has) setEmptyText();
+        updateHeader();
+    }
+
+    private void buildRootRows() {
+        for (String[] f : folders) {
+            int count = 0;
+            long size = 0;
+            for (VideoItem v : all) {
+                if (f[0].equals(v.tree)) {
+                    count++;
+                    size += v.size;
+                }
             }
-            subtitle.setText(folders.isEmpty() ? "还没有添加文件夹" : "0 个视频");
-        } else {
-            updateSubtitle();
+            Row r = new Row();
+            r.type = T_DIR;
+            r.label = f[1];
+            r.tree = f[0];
+            r.rel = "";
+            r.sub = count == 0 ? "空文件夹"
+                    : String.format(Locale.US, "%d 个视频 · %s", count, sizeText(size));
+            rows.add(r);
         }
     }
 
-    private void updateSubtitle() {
-        long total = 0;
-        for (VideoItem v : all) total += v.size;
-        subtitle.setText(String.format(java.util.Locale.US,
-                "%d 个视频 · %s · %d 个文件夹", all.size(), Ui.fmtSize(total), folders.size()));
+    private void buildDirRows() {
+        Crumb cur = stack.get(stack.size() - 1);
+
+        List<VideoItem> scoped = new ArrayList<>();
+        for (VideoItem v : all) {
+            if (cur.tree.equals(v.tree)) scoped.add(v);
+        }
+        String[] rels = new String[scoped.size()];
+        long[] sizes = new long[scoped.size()];
+        for (int i = 0; i < scoped.size(); i++) {
+            rels[i] = scoped.get(i).relPath;
+            sizes[i] = scoped.get(i).size;
+        }
+
+        List<Nav.Dir> dirs = Nav.subdirsOf(cur.rel, rels, sizes);
+        Collections.sort(dirs, new java.util.Comparator<Nav.Dir>() {
+            @Override
+            public int compare(Nav.Dir a, Nav.Dir b) {
+                return Ui.NATURAL.compare(a.name, b.name);
+            }
+        });
+
+        if (!dirs.isEmpty()) {
+            Row h = new Row();
+            h.type = T_HEADER;
+            h.label = "文件夹";
+            rows.add(h);
+            for (Nav.Dir d : dirs) {
+                Row r = new Row();
+                r.type = T_DIR;
+                r.label = d.name;
+                r.tree = cur.tree;
+                r.rel = d.rel;
+                r.sub = String.format(Locale.US, "%d 个视频 · %s", d.count, sizeText(d.size));
+                rows.add(r);
+            }
+        }
+
+        List<VideoItem> videos = new ArrayList<>();
+        for (int idx : Nav.directOf(cur.rel, rels)) videos.add(scoped.get(idx));
+        Collections.sort(videos, new java.util.Comparator<VideoItem>() {
+            @Override
+            public int compare(VideoItem a, VideoItem b) {
+                return Ui.NATURAL.compare(a.title, b.title);
+            }
+        });
+        if (!videos.isEmpty()) {
+            Row h = new Row();
+            h.type = T_HEADER;
+            h.label = "视频";
+            rows.add(h);
+            for (VideoItem v : videos) {
+                Row r = new Row();
+                r.type = T_VIDEO;
+                r.item = v;
+                rows.add(r);
+            }
+        }
+    }
+
+    /** 体积文案：0 也要显示成「0 MB」，避免副标题出现空尾巴 */
+    private String sizeText(long b) {
+        return b <= 0 ? "0 MB" : Ui.fmtSize(b);
+    }
+
+    private void setEmptyText() {
+        if (folders.isEmpty()) {
+            empty.setText("还没有添加文件夹\n\n点右上角「＋ 添加」，选中存放视频的文件夹（比如 Movies）\n之后这个应用就只看那里，不会再扫相册和截图");
+        } else if (stack.isEmpty()) {
+            empty.setText("添加的文件夹里没找到视频\n\n支持 mp4 / mkv / avi / ts / mov 等常见格式");
+        } else {
+            empty.setText("这个文件夹里没有视频\n\n点左上角箭头返回上一级");
+        }
+    }
+
+    /** 标题、副标题、右上角按钮的显隐，全部随当前层级刷新 */
+    private void updateHeader() {
+        refreshHeaderState();
+        long size = 0;
+        int count = 0;
+        if (stack.isEmpty()) {
+            titleView.setText("看番");
+            for (VideoItem v : all) size += v.size;
+            count = all.size();
+            if (folders.isEmpty()) subtitle.setText("还没有添加文件夹");
+            else subtitle.setText(String.format(Locale.US, "%d 个文件夹 · %d 个视频 · %s",
+                    folders.size(), count, sizeText(size)));
+            return;
+        }
+        Crumb cur = stack.get(stack.size() - 1);
+        titleView.setText(cur.name);
+        for (VideoItem v : all) {
+            if (cur.tree.equals(v.tree) && Nav.under(v.relPath, cur.rel)) {
+                count++;
+                size += v.size;
+            }
+        }
+        subtitle.setText(String.format(Locale.US, "%d 个视频 · %s", count, sizeText(size)));
+    }
+
+    private void goUp() {
+        if (stack.isEmpty()) return;
+        stack.remove(stack.size() - 1);
+        rebuildRows();
+        list.setSelection(0);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (!stack.isEmpty()) {
+            goUp();
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastBack < 2000) {
+            super.onBackPressed();
+            return;
+        }
+        lastBack = now;
+        Toast.makeText(this, "再按一次退出", Toast.LENGTH_SHORT).show();
     }
 
     private void open(VideoItem v) {
-        String tree = "";
-        for (String[] f : folders) {
-            if (f[1].equals(v.bucket)) {
-                tree = f[0];
-                break;
-            }
-        }
         Intent it = new Intent(this, PlayerActivity.class);
         it.putExtra("uri", v.uri.toString());
         it.putExtra("title", v.title);
         it.putExtra("bucket", v.bucket);
-        it.putExtra("tree", tree);
+        it.putExtra("tree", v.tree);
+        it.putExtra("rel", v.relPath);
         startActivity(it);
     }
 
@@ -436,45 +604,101 @@ public class MainActivity extends Activity {
 
         @Override
         public int getViewTypeCount() {
-            return 2;
+            return 3;
         }
 
         @Override
         public int getItemViewType(int position) {
-            return rows.get(position).header ? 0 : 1;
+            return rows.get(position).type;
         }
 
         @Override
         public boolean isEnabled(int position) {
-            return !rows.get(position).header;
+            return rows.get(position).type != T_HEADER;
         }
 
         @Override
         public View getView(int position, View convert, ViewGroup parent) {
             Row r = rows.get(position);
-            if (r.header) {
-                LinearLayout box = new LinearLayout(MainActivity.this);
-                box.setOrientation(LinearLayout.HORIZONTAL);
-                box.setGravity(Gravity.CENTER_VERTICAL);
-                box.setPadding(Ui.dp(MainActivity.this, 4), Ui.dp(MainActivity.this, 16),
-                        Ui.dp(MainActivity.this, 4), Ui.dp(MainActivity.this, 8));
-
-                TextView name = new TextView(MainActivity.this);
-                name.setText(r.folder);
-                name.setTextColor(getColor(R.color.text));
-                name.setTextSize(14f);
-                name.setTypeface(Typeface.DEFAULT_BOLD);
-                box.addView(name);
-
-                TextView cnt = new TextView(MainActivity.this);
-                cnt.setText("  " + r.count + " 集");
-                cnt.setTextColor(getColor(R.color.dim));
-                cnt.setTextSize(12f);
-                box.addView(cnt);
-                return box;
-            }
+            if (r.type == T_HEADER) return headerView(r);
+            if (r.type == T_DIR) return dirView(r);
             return itemView(r.item);
         }
+    }
+
+    private View headerView(Row r) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.HORIZONTAL);
+        box.setGravity(Gravity.CENTER_VERTICAL);
+        box.setPadding(Ui.dp(this, 4), Ui.dp(this, 14),
+                Ui.dp(this, 4), Ui.dp(this, 6));
+
+        TextView name = new TextView(this);
+        name.setText(r.label);
+        name.setTextColor(getColor(R.color.dim));
+        name.setTextSize(12f);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        name.setLetterSpacing(0.05f);
+        box.addView(name);
+        return box;
+    }
+
+    /** 文件夹行：图标 + 名称 + 统计 + 箭头 */
+    private View dirView(Row r) {
+        int pad = Ui.dp(this, 5);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(0, 0, 0, pad);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(Ui.dp(this, 12), Ui.dp(this, 11), Ui.dp(this, 12), Ui.dp(this, 11));
+        card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        FrameLayout iconBox = new FrameLayout(this);
+        iconBox.setBackground(Ui.round(this, Ui.alpha(getColor(R.color.accent), 0.13f), 12f));
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(R.drawable.ic_folder);
+        ic.setColorFilter(getColor(R.color.accent));
+        int is = Ui.dp(this, 22);
+        FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(is, is, Gravity.CENTER);
+        iconBox.addView(ic, ilp);
+        card.addView(iconBox, new LinearLayout.LayoutParams(Ui.dp(this, 46), Ui.dp(this, 46)));
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        colLp.setMargins(Ui.dp(this, 12), 0, 0, 0);
+        card.addView(col, colLp);
+
+        TextView name = new TextView(this);
+        name.setText(r.label);
+        name.setTextColor(getColor(R.color.text));
+        name.setTextSize(15f);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        name.setMaxLines(1);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        col.addView(name);
+
+        TextView meta = new TextView(this);
+        meta.setText(r.sub);
+        meta.setTextColor(getColor(R.color.dim));
+        meta.setTextSize(11.5f);
+        meta.setPadding(0, Ui.dp(this, 4), 0, 0);
+        col.addView(meta);
+
+        ImageView chev = new ImageView(this);
+        chev.setImageResource(R.drawable.ic_chevron);
+        chev.setColorFilter(Ui.alpha(getColor(R.color.dim), 0.75f));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                Ui.dp(this, 18), Ui.dp(this, 18));
+        clp.setMargins(Ui.dp(this, 8), 0, 0, 0);
+        card.addView(chev, clp);
+
+        wrap.addView(card, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return wrap;
     }
 
     private View itemView(final VideoItem v) {
@@ -536,7 +760,7 @@ public class MainActivity extends Activity {
 
         long pos = Store.getPos(this, v.key());
         boolean watched = v.duration > 0 && pos > 3000;
-        String pct = watched ? String.format(java.util.Locale.US, " · 已看 %d%%",
+        String pct = watched ? String.format(Locale.US, " · 已看 %d%%",
                 (int) (pos * 100 / v.duration)) : "";
         meta.setText(Ui.fmtSize(v.size) + pct);
 
@@ -553,13 +777,6 @@ public class MainActivity extends Activity {
 
         wrap.addView(card, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        wrap.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v2) {
-                open(v);
-            }
-        });
 
         Bitmap cached = thumbs.get(v.key());
         if (cached != null) {

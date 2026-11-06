@@ -58,12 +58,12 @@ public class Scan {
         return "视频";
     }
 
-    /** 递归扫描整棵树 */
+    /** 递归扫描整棵树，每个条目都带上相对路径（relPath）与所属根（tree） */
     public static List<VideoItem> scanTree(Context c, Uri tree) {
         List<VideoItem> out = new ArrayList<>();
         String root = treeName(c, tree);
         try {
-            walk(c, tree, DocumentId(tree), root, out, 0);
+            walk(c, tree, DocumentId(tree), root, "", out, 0);
         } catch (Exception ignored) {
         }
         return out;
@@ -77,7 +77,14 @@ public class Scan {
         }
     }
 
-    private static void walk(Context c, Uri tree, String docId, String bucket,
+    /** 路径最后一段作为文件夹显示名 */
+    private static String leaf(String rel, String fallback) {
+        if (rel == null || rel.isEmpty()) return fallback;
+        int i = rel.lastIndexOf('/');
+        return i < 0 ? rel : rel.substring(i + 1);
+    }
+
+    private static void walk(Context c, Uri tree, String docId, String rootName, String rel,
                              List<VideoItem> out, int depth) {
         if (docId == null || depth > 8) return;
         Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
@@ -98,7 +105,9 @@ public class Scan {
                     VideoItem v = new VideoItem();
                     v.name = name == null ? "" : name;
                     v.title = Ui.prettyTitle(v.name);
-                    v.bucket = bucket;
+                    v.relPath = rel;
+                    v.tree = tree.toString();
+                    v.bucket = leaf(rel, rootName);
                     v.size = size;
                     v.uri = DocumentsContract.buildDocumentUriUsingTree(tree, id);
                     out.add(v);
@@ -109,18 +118,21 @@ public class Scan {
             if (cur != null) cur.close();
         }
         for (String[] d : dirs) {
-            walk(c, tree, d[0], d[1] == null ? bucket : d[1], out, depth + 1);
+            String n = d[1] == null ? "" : d[1];
+            if (n.isEmpty()) continue;
+            String childRel = rel.isEmpty() ? n : rel + "/" + n;
+            walk(c, tree, d[0], rootName, childRel, out, depth + 1);
         }
     }
 
-    /** 只取某个文件夹（直属）里的视频，用于播放器的连播列表 */
-    public static List<VideoItem> childrenOf(Context c, Uri tree, String folder) {
+    /** 只取某个目录（直属）里的视频，用于播放器的连播列表。relPath 为 "" 表示根目录 */
+    public static List<VideoItem> childrenOf(Context c, Uri tree, String relPath) {
         List<VideoItem> out = new ArrayList<>();
         try {
-            String root = treeName(c, tree);
-            String docId = folder != null && folder.equals(root)
-                    ? DocumentId(tree) : findDir(c, tree, DocumentId(tree), folder, 0);
+            String docId = resolve(c, tree, relPath);
             if (docId == null) return out;
+            String rel = relPath == null ? "" : relPath;
+            String rootName = treeName(c, tree);
 
             Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
             Cursor cur = null;
@@ -137,7 +149,9 @@ public class Scan {
                     VideoItem v = new VideoItem();
                     v.name = name == null ? "" : name;
                     v.title = Ui.prettyTitle(v.name);
-                    v.bucket = folder;
+                    v.relPath = rel;
+                    v.tree = tree.toString();
+                    v.bucket = leaf(rel, rootName);
                     v.size = size;
                     v.uri = DocumentsContract.buildDocumentUriUsingTree(tree, id);
                     out.add(v);
@@ -150,11 +164,24 @@ public class Scan {
         return out;
     }
 
-    private static String findDir(Context c, Uri tree, String docId, String name, int depth) {
-        if (docId == null || name == null || depth > 8) return null;
+    /** 按 "A/B/C" 逐层解析出 documentId，找不到返回 null */
+    private static String resolve(Context c, Uri tree, String relPath) {
+        String docId = DocumentId(tree);
+        if (docId == null) return null;
+        if (relPath == null || relPath.isEmpty()) return docId;
+        for (String seg : relPath.split("/")) {
+            if (seg.isEmpty()) continue;
+            String next = childDir(c, tree, docId, seg);
+            if (next == null) return null;
+            docId = next;
+        }
+        return docId;
+    }
+
+    /** 只在直属子目录里找一个同名目录 */
+    private static String childDir(Context c, Uri tree, String docId, String name) {
         Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
         Cursor cur = null;
-        List<String[]> dirs = new ArrayList<>();
         try {
             cur = c.getContentResolver().query(children, PROJ, null, null, null);
             if (cur == null) return null;
@@ -162,18 +189,11 @@ public class Scan {
                 String id = cur.getString(0);
                 String n = cur.getString(1);
                 String mime = cur.getString(2);
-                if (DIR_MIME.equals(mime)) {
-                    if (name.equals(n)) return id;
-                    dirs.add(new String[]{id, n});
-                }
+                if (DIR_MIME.equals(mime) && name.equals(n)) return id;
             }
         } catch (Exception ignored) {
         } finally {
             if (cur != null) cur.close();
-        }
-        for (String[] d : dirs) {
-            String r = findDir(c, tree, d[0], name, depth + 1);
-            if (r != null) return r;
         }
         return null;
     }

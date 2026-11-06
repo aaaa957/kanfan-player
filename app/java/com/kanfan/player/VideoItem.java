@@ -6,7 +6,12 @@ public class VideoItem {
     public long id;
     public String name = "";
     public String title = "";
+    /** 直属文件夹的显示名（根目录下的文件则为根目录名） */
     public String bucket = "";
+    /** 相对所属授权目录的路径，"" 表示就在根目录下 */
+    public String relPath = "";
+    /** 所属的授权目录（tree uri 字符串），用于区分多个已添加的文件夹 */
+    public String tree = "";
     public long duration;
     public long size;
     public Uri uri;

@@ -60,6 +60,7 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
     private String title = "";
     private String bucket = "";
     private String treeUri = "";
+    private String relPath = "";
     private List<VideoItem> playlist = new ArrayList<>();
     private int index = -1;
 
@@ -93,9 +94,11 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
         title = getIntent().getStringExtra("title");
         bucket = getIntent().getStringExtra("bucket");
         treeUri = getIntent().getStringExtra("tree");
+        relPath = getIntent().getStringExtra("rel");
         if (title == null) title = "";
         if (bucket == null) bucket = "";
         if (treeUri == null) treeUri = "";
+        if (relPath == null) relPath = "";
 
         buildUi();
         loadPlaylist();
@@ -727,41 +730,12 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
         new Thread(new Runnable() {
             @Override
             public void run() {
-                List<VideoItem> list;
-                if (treeUri != null && treeUri.length() > 0) {
-                    // 手动添加的文件夹：只在这个目录里找同系列
-                    list = Scan.childrenOf(PlayerActivity.this, Uri.parse(treeUri), bucket);
-                } else {
-                    list = new ArrayList<>();
-                    Uri col = MediaStore.Video.Media.EXTERNAL_CONTENT_URI;
-                    String[] proj = {MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME,
-                            MediaStore.Video.Media.DURATION, MediaStore.Video.Media.SIZE,
-                            MediaStore.Video.Media.BUCKET_DISPLAY_NAME};
-                    Cursor c = null;
+                List<VideoItem> list = new ArrayList<>();
+                if (treeUri.length() > 0) {
+                    // 手动添加的文件夹：只在这个目录里找同系列，避免跨文件夹串播
                     try {
-                        c = getContentResolver().query(col, proj,
-                                MediaStore.Video.Media.BUCKET_DISPLAY_NAME + "=?",
-                                new String[]{bucket}, null);
-                        if (c != null) {
-                            int iId = c.getColumnIndex(MediaStore.Video.Media._ID);
-                            int iName = c.getColumnIndex(MediaStore.Video.Media.DISPLAY_NAME);
-                            int iDur = c.getColumnIndex(MediaStore.Video.Media.DURATION);
-                            int iSize = c.getColumnIndex(MediaStore.Video.Media.SIZE);
-                            while (c.moveToNext()) {
-                                VideoItem v = new VideoItem();
-                                v.id = c.getLong(iId);
-                                v.name = c.getString(iName) == null ? "" : c.getString(iName);
-                                v.title = Ui.prettyTitle(v.name);
-                                v.duration = c.getLong(iDur);
-                                v.size = c.getLong(iSize);
-                                v.bucket = bucket;
-                                v.uri = ContentUris.withAppendedId(col, v.id);
-                                list.add(v);
-                            }
-                        }
+                        list = Scan.childrenOf(PlayerActivity.this, Uri.parse(treeUri), relPath);
                     } catch (Exception ignored) {
-                    } finally {
-                        if (c != null) c.close();
                     }
                 }
                 final String myKey = Ui.seriesKey(title);
