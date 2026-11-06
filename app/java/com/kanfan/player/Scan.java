@@ -72,7 +72,8 @@ public class Scan {
         for (String e : ARCHIVE_EXT) {
             if (n.endsWith(e)) return true;
         }
-        return false;
+        // 分卷：.7z.001 / .z01 / .r00 这些也得能点开
+        return Vols.keyOf(name) != null;
     }
 
     public static boolean isOther(String name) {
@@ -145,6 +146,8 @@ public class Scan {
         Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
         Cursor cur = null;
         List<String[]> dirs = new ArrayList<>();
+        List<Entry> mine = new ArrayList<>();
+        List<String> names = new ArrayList<>();
         try {
             cur = c.getContentResolver().query(children, PROJ, null, null, null);
             if (cur == null) return;
@@ -154,6 +157,7 @@ public class Scan {
                 String name = cur.getString(iName);
                 String mime = cur.getString(iMime);
                 long size = cur.isNull(iSize) ? 0 : cur.getLong(iSize);
+                names.add(name == null ? "" : name);
                 if (DIR_MIME.equals(mime)) {
                     dirs.add(new String[]{id, name});
                 } else if (isVideo(name, mime) || isBook(name) || isImage(name)
@@ -173,12 +177,17 @@ public class Scan {
                     v.bucket = leaf(rel, rootName);
                     v.size = size;
                     v.uri = DocumentsContract.buildDocumentUriUsingTree(tree, id);
-                    out.add(v);
+                    mine.add(v);
                 }
             }
         } catch (Exception ignored) {
         } finally {
             if (cur != null) cur.close();
+        }
+        // 分卷只留主卷那一行：刀剑.part1.rar 一行，part2/part3 不重复出现
+        for (Entry v : mine) {
+            if (v.isArchive() && Vols.secondary(v.name, names)) continue;
+            out.add(v);
         }
         for (String[] d : dirs) {
             String n = d[1] == null ? "" : d[1];
@@ -188,9 +197,53 @@ public class Scan {
         }
     }
 
+    /** 某个目录里所有文件的名字（不分类型），用于识别分卷 */
+    public static List<String> nameList(Context c, Uri tree, String relPath) {
+        List<String> out = new ArrayList<>();
+        Cursor cur = null;
+        try {
+            String docId = resolve(c, tree, relPath);
+            if (docId == null) return out;
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
+            cur = c.getContentResolver().query(children, new String[]{
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME},
+                    null, null, null);
+            if (cur == null) return out;
+            while (cur.moveToNext()) {
+                String n = cur.getString(0);
+                if (n != null) out.add(n);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (cur != null) cur.close();
+        }
+        return out;
+    }
+
+    /** 某个目录下指定名字的文件 uri；找不到返回 null */
+    public static Uri childUri(Context c, Uri tree, String relPath, String name) {
+        Cursor cur = null;
+        try {
+            String docId = resolve(c, tree, relPath);
+            if (docId == null) return null;
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
+            cur = c.getContentResolver().query(children, PROJ, null, null, null);
+            if (cur == null) return null;
+            while (cur.moveToNext()) {
+                String n = cur.getString(1);
+                if (n != null && n.equals(name)) {
+                    return DocumentsContract.buildDocumentUriUsingTree(tree, cur.getString(0));
+                }
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (cur != null) cur.close();
+        }
+        return null;
+    }
+
     /** 只取某个目录（直属）里的视频，用于播放器的连播列表。relPath 为 "" 表示根目录 */
-    public static List<Entry> childrenOf(Context c, Uri tree, String relPath) {
-        List<Entry> out = new ArrayList<>();
+    public static List<Entry> childrenOf(Context c, Uri tree, String relPath) {        List<Entry> out = new ArrayList<>();
         try {
             String docId = resolve(c, tree, relPath);
             if (docId == null) return out;

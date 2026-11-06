@@ -41,7 +41,7 @@ import java.util.Map;
 
 /**
  * 压缩包：列内容、输密码、解压到授权目录。
- * 目前只支持 zip（含 ZipCrypto 与 AES 加密）；7z / rar 会给出说明。
+ * zip 走纯 Java（Zip），7z / rar 走原生库；分卷先由 Vols 归一到整组再读。
  */
 public class ArchiveActivity extends Activity {
 
@@ -63,8 +63,14 @@ public class ArchiveActivity extends Activity {
     /** 0 zip / 1 rar / 2 7z */
     private int natKind = 0;
     private String natPath = "";
+    private String[] natPaths;
     private ParcelFileDescriptor natPfd;
     private boolean natEncrypted;
+    /** 分卷：卷组信息 + 打开着的卷（关页面时一起释放） */
+    private Vols.Set volSet;
+    private final List<ParcelFileDescriptor> volPfds = new ArrayList<ParcelFileDescriptor>();
+    private File rarFarm;
+    private File joinedVol;
     private final List<Item> items = new ArrayList<Item>();
 
     static class Item {
@@ -311,10 +317,13 @@ public class ArchiveActivity extends Activity {
     // ---------------- 读取 ----------------
 
     private void startLoad() {
-        String low = name.toLowerCase(Locale.US);
-        if (low.endsWith(".rar")) natKind = 1;
-        else if (low.endsWith(".7z")) natKind = 2;
-        else natKind = 0;
+        // 分卷：从任意一卷点进来，都归一到整组
+        try {
+            volSet = Vols.resolve(name, Scan.nameList(this, Uri.parse(treeUri), relPath));
+        } catch (Exception ignored) {
+        }
+        String first = volSet == null ? name : volSet.names[0];
+        natKind = Vols.kindOf(first);
 
         if (natKind != 0) {
             if (!Nat.ok()) {
@@ -331,13 +340,27 @@ public class ArchiveActivity extends Activity {
                 Zip z = null;
                 String err = null;
                 try {
-                    ParcelFileDescriptor pfd = getContentResolver()
-                            .openFileDescriptor(Uri.parse(uriStr), "r");
-                    if (pfd == null) throw new IOException("打不开这个文件");
-                    FileChannel ch = new FileInputStream(pfd.getFileDescriptor()).getChannel();
-                    z = Zip.open(ch, pfd);
+                    if (volSet != null && volSet.multi()) {
+                        Zip.Src[] parts = new Zip.Src[volSet.names.length];
+                        for (int i = 0; i < parts.length; i++) {
+                            ParcelFileDescriptor p = getContentResolver()
+                                    .openFileDescriptor(volumeUri(volSet.names[i]), "r");
+                            if (p == null) throw new IOException("打不开 " + volSet.names[i]);
+                            volPfds.add(p);
+                            parts[i] = new Zip.ChannelSrc(
+                                    new FileInputStream(p.getFileDescriptor()).getChannel());
+                        }
+                        z = Zip.open(new Zip.MultiSrc(parts), null);
+                    } else {
+                        ParcelFileDescriptor pfd = getContentResolver()
+                                .openFileDescriptor(Uri.parse(uriStr), "r");
+                        if (pfd == null) throw new IOException("打不开这个文件");
+                        FileChannel ch = new FileInputStream(pfd.getFileDescriptor()).getChannel();
+                        z = Zip.open(ch, pfd);
+                    }
                 } catch (Throwable t) {
                     err = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+                    if (volSet != null && volSet.gap != null) err = volSet.gap + "，压缩包不完整";
                 }
                 final Zip fz = z;
                 final String fe = err;
@@ -349,6 +372,82 @@ public class ArchiveActivity extends Activity {
                 });
             }
         }).start();
+    }
+
+    /** 卷名 → uri；当前点开的那一卷直接用 intent 里的 uri */
+    private Uri volumeUri(String volName) {
+        if (volName.equalsIgnoreCase(name)) return Uri.parse(uriStr);
+        Uri u = Scan.childUri(this, Uri.parse(treeUri), relPath, volName);
+        return u == null ? Uri.parse(uriStr) : u;
+    }
+
+    /** 把各卷以真实文件名软链到 cache：unrar 靠文件名找下一卷，/proc/self/fd/N 它接不上 */
+    private String makeRarFarm() throws Exception {
+        File dir = new File(getCacheDir(), "vol");
+        deleteTree(dir);
+        if (!dir.exists() && !dir.mkdirs()) throw new IOException("建不了临时目录");
+        for (int i = 0; i < volSet.names.length; i++) {
+            ParcelFileDescriptor p = getContentResolver()
+                    .openFileDescriptor(volumeUri(volSet.names[i]), "r");
+            if (p == null) throw new IOException("打不开 " + volSet.names[i]);
+            volPfds.add(p);
+            File link = new File(dir, volSet.names[i]);
+            try {
+                android.system.Os.symlink("/proc/self/fd/" + p.getFd(), link.getAbsolutePath());
+            } catch (Throwable t) {
+                // 个别文件系统不让建软链，退回复制
+                copyFd(p, link);
+            }
+        }
+        rarFarm = dir;
+        return new File(dir, volSet.names[0]).getAbsolutePath();
+    }
+
+    /** 把各卷按顺序拼成一个文件，给不支持跨卷的兜底路径用 */
+    private String joinVolumes() throws Exception {
+        File out = new File(getCacheDir(), "joined.tmp");
+        java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+        try {
+            byte[] b = new byte[256 * 1024];
+            for (int i = 0; i < volSet.names.length; i++) {
+                ParcelFileDescriptor p = getContentResolver()
+                        .openFileDescriptor(volumeUri(volSet.names[i]), "r");
+                if (p == null) throw new IOException("打不开 " + volSet.names[i]);
+                volPfds.add(p);
+                FileInputStream in = new FileInputStream(p.getFileDescriptor());
+                int n;
+                while ((n = in.read(b)) > 0) fos.write(b, 0, n);
+            }
+        } finally {
+            try {
+                fos.close();
+            } catch (Exception ignored) {
+            }
+        }
+        joinedVol = out;
+        return out.getAbsolutePath();
+    }
+
+    private void copyFd(ParcelFileDescriptor p, File dest) throws Exception {        java.io.FileOutputStream out = new java.io.FileOutputStream(dest);
+        FileInputStream in = new FileInputStream(p.getFileDescriptor());
+        try {
+            byte[] b = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(b)) > 0) out.write(b, 0, n);
+        } finally {
+            try {
+                out.close();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private static void deleteTree(File f) {
+        File[] kids = f.listFiles();
+        if (kids != null) {
+            for (File k : kids) deleteTree(k);
+        }
+        f.delete();
     }
 
     private void onLoaded(Zip z, String err) {
@@ -399,14 +498,37 @@ public class ArchiveActivity extends Activity {
             public void run() {
                 String res;
                 try {
-                    ParcelFileDescriptor pfd = getContentResolver()
-                            .openFileDescriptor(Uri.parse(uriStr), "r");
-                    if (pfd == null) {
-                        res = "EOPEN";
+                    if (natKind == 2 && volSet != null && volSet.multi()) {
+                        // 7z 分卷：各卷虚拟拼接，原生层跨卷读
+                        String[] ps = new String[volSet.names.length];
+                        for (int i = 0; i < ps.length; i++) {
+                            ParcelFileDescriptor p = getContentResolver()
+                                    .openFileDescriptor(volumeUri(volSet.names[i]), "r");
+                            if (p == null) throw new IOException("打不开 " + volSet.names[i]);
+                            volPfds.add(p);
+                            ps[i] = "/proc/self/fd/" + p.getFd();
+                        }
+                        natPaths = ps;
+                        res = Nat.szList(ps);
+                        if (res == null || !res.startsWith("OK\n")) {
+                            // 原生跨卷没读通时的兜底：把各卷拼成一份再读（稳，但多占一份空间）
+                            String joined = joinVolumes();
+                            natPaths = null;
+                            natPath = joined;
+                            res = Nat.szList(new String[]{joined});
+                        }
+                    } else if (natKind == 1 && volSet != null && volSet.multi()) {
+                        natPath = makeRarFarm();
+                        res = Nat.rarList(natPath, "");
                     } else {
+                        ParcelFileDescriptor pfd = getContentResolver()
+                                .openFileDescriptor(Uri.parse(uriStr), "r");
+                        if (pfd == null) throw new IOException("打不开这个文件");
                         natPfd = pfd;
                         natPath = "/proc/self/fd/" + pfd.getFd();
-                        res = natKind == 1 ? Nat.rarList(natPath, "") : Nat.szList(natPath);
+                        res = natKind == 1
+                                ? Nat.rarList(natPath, "")
+                                : Nat.szList(new String[]{natPath});
                     }
                 } catch (Throwable t) {
                     res = "EOPEN";
@@ -462,10 +584,11 @@ public class ArchiveActivity extends Activity {
         list.setVisibility(View.GONE);
         bottomBar.setVisibility(View.GONE);
 
-        String low = name.toLowerCase(Locale.US);
-        boolean sevenZ = low.endsWith(".7z");
-        boolean rar = low.endsWith(".rar");
         String reason = natReason(err);
+        if (volSet != null && volSet.gap != null) {
+            reason = "这组分卷少了" + volSet.gap.replace("缺", "") + "，解不完整。\n\n"
+                    + "把缺的那一卷放进同一个文件夹再试。";
+        }
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
@@ -846,7 +969,7 @@ public class ArchiveActivity extends Activity {
                         Item it = items.get(i);
                         if (it.dir) continue;
                         File tmp = new File(tmpDir, "kf_" + i);
-                        int rc = Nat.szExtractOne(natPath, i, tmp.getAbsolutePath());
+                        int rc = Nat.szExtractOne(natPaths != null ? natPaths : new String[]{natPath}, i, tmp.getAbsolutePath());
                         if (rc != 0) {
                             if (err[0] == null) {
                                 err[0] = rc == 3
@@ -1025,6 +1148,21 @@ public class ArchiveActivity extends Activity {
             } catch (Exception ignored) {
             }
             natPfd = null;
+        }
+        for (ParcelFileDescriptor p : volPfds) {
+            try {
+                p.close();
+            } catch (Exception ignored) {
+            }
+        }
+        volPfds.clear();
+        if (rarFarm != null) {
+            deleteTree(rarFarm);
+            rarFarm = null;
+        }
+        if (joinedVol != null) {
+            joinedVol.delete();
+            joinedVol = null;
         }
         if (zip != null) {
             final Zip z = zip;

@@ -69,18 +69,117 @@ public class Zip implements Closeable {
     private static final int SIG_CEN = 0x02014b50;
     private static final int SIG_LOC = 0x04034b50;
 
-    private final FileChannel ch;
+    private final Src src;
     private final Closeable extra;
     public final List<Entry> entries = new ArrayList<Entry>();
 
-    private Zip(FileChannel ch, Closeable extra) {
-        this.ch = ch;
+    private Zip(Src src, Closeable extra) {
+        this.src = src;
         this.extra = extra;
+    }
+
+    /** 随机读的来源：单文件，或多卷拼起来的逻辑文件 */
+    public interface Src extends Closeable {
+        long size() throws IOException;
+
+        int readAt(long pos, byte[] b, int off, int len) throws IOException;
+    }
+
+    /** 一个普通文件 */
+    public static final class ChannelSrc implements Src {
+        private final FileChannel ch;
+
+        public ChannelSrc(FileChannel ch) {
+            this.ch = ch;
+        }
+
+        @Override
+        public long size() throws IOException {
+            return ch.size();
+        }
+
+        @Override
+        public int readAt(long pos, byte[] b, int off, int len) throws IOException {
+            int done = 0;
+            while (done < len) {
+                int n = ch.read(ByteBuffer.wrap(b, off + done, len - done), pos + done);
+                if (n <= 0) break;
+                done += n;
+            }
+            return done;
+        }
+
+        @Override
+        public void close() throws IOException {
+            ch.close();
+        }
+    }
+
+    /**
+     * 多卷按顺序拼成一个逻辑文件。
+     * 分卷 zip（.z01+.z02+...+zip）里各记录的偏移都是相对整包起点的，
+     * 所以只要把卷拼起来，目录解析完全不用改。
+     */
+    public static final class MultiSrc implements Src {
+        private final Src[] parts;
+        private final long[] starts;
+        private final long total;
+
+        public MultiSrc(Src[] parts) throws IOException {
+            if (parts == null || parts.length == 0) throw new IOException("没有分卷");
+            this.parts = parts;
+            this.starts = new long[parts.length + 1];
+            for (int i = 0; i < parts.length; i++) {
+                starts[i + 1] = starts[i] + parts[i].size();
+            }
+            this.total = starts[parts.length];
+        }
+
+        @Override
+        public long size() {
+            return total;
+        }
+
+        @Override
+        public int readAt(long pos, byte[] b, int off, int len) throws IOException {
+            if (pos < 0) throw new IOException("读取越界");
+            int done = 0;
+            while (done < len && pos + done < total) {
+                int i = partOf(pos + done);
+                long local = pos + done - starts[i];
+                long cap = starts[i + 1] - (pos + done);
+                int want = (int) Math.min(len - done, cap);
+                int n = parts[i].readAt(local, b, off + done, want);
+                if (n <= 0) break;
+                done += n;
+            }
+            return done;
+        }
+
+        private int partOf(long pos) {
+            int lo = 0, hi = parts.length - 1;
+            while (lo < hi) {
+                int mid = (lo + hi + 1) >>> 1;
+                if (starts[mid] <= pos) lo = mid;
+                else hi = mid - 1;
+            }
+            return lo;
+        }
+
+        @Override
+        public void close() {
+            for (Src s : parts) {
+                try {
+                    if (s != null) s.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
     }
 
     public static Zip open(File f) throws IOException {
         FileChannel c = new RandomAccessFile(f, "r").getChannel();
-        Zip z = new Zip(c, c);
+        Zip z = new Zip(new ChannelSrc(c), c);
         try {
             z.readCentralDirectory();
         } catch (IOException e) {
@@ -92,7 +191,11 @@ public class Zip implements Closeable {
 
     /** Android 上从 SAF 的 fd 打开，closer 用于一起释放 */
     public static Zip open(FileChannel c, Closeable closer) throws IOException {
-        Zip z = new Zip(c, closer);
+        return open(new ChannelSrc(c), closer);
+    }
+
+    public static Zip open(Src s, Closeable closer) throws IOException {
+        Zip z = new Zip(s, closer);
         try {
             z.readCentralDirectory();
         } catch (IOException e) {
@@ -105,11 +208,11 @@ public class Zip implements Closeable {
     @Override
     public void close() {
         try {
-            if (ch != null) ch.close();
+            if (src != null) src.close();
         } catch (Exception ignored) {
         }
         try {
-            if (extra != null && extra != ch) extra.close();
+            if (extra != null && extra != src) extra.close();
         } catch (Exception ignored) {
         }
     }
@@ -117,7 +220,7 @@ public class Zip implements Closeable {
     // ---------------- 目录解析 ----------------
 
     private void readCentralDirectory() throws IOException {
-        long len = ch.size();
+        long len = src.size();
         if (len < 22) throw new IOException("文件太小，不是 zip");
         int tail = (int) Math.min(len, 65557);
         byte[] buf = readAt(len - tail, tail);
@@ -210,7 +313,7 @@ public class Zip implements Closeable {
             byte[] loc = readAt(eocdPos - 20, 20);
             if (u32(loc, 0) != SIG_EOCD64_LOC) return null;
             long off = u64(loc, 8);
-            if (off <= 0 || off > ch.size()) return null;
+            if (off <= 0 || off > src.size()) return null;
             byte[] rec = readAt(off, 56);
             if (u32(rec, 0) != SIG_EOCD64) return null;
             return new long[]{u64(rec, 32), u64(rec, 40), u64(rec, 48)};
@@ -363,13 +466,13 @@ public class Zip implements Closeable {
 
     private byte[] readAt(long pos, int n) throws IOException {
         if (n <= 0) return new byte[0];
-        if (pos < 0 || pos + n > ch.size()) throw new EOFException("读取越界");
+        if (pos < 0 || pos + n > src.size()) throw new EOFException("读取越界");
         byte[] b = new byte[n];
-        ByteBuffer bb = ByteBuffer.wrap(b);
-        ch.position(pos);
-        while (bb.hasRemaining()) {
-            int r = ch.read(bb);
-            if (r < 0) throw new EOFException("读取越界");
+        int done = 0;
+        while (done < n) {
+            int r = src.readAt(pos + done, b, done, n - done);
+            if (r <= 0) throw new EOFException("读取越界");
+            done += r;
         }
         return b;
     }
@@ -396,10 +499,8 @@ public class Zip implements Closeable {
         public int read(byte[] b, int off, int len) throws IOException {
             if (pos >= end) return -1;
             int want = (int) Math.min(len, end - pos);
-            ByteBuffer bb = ByteBuffer.wrap(b, off, want);
-            ch.position(pos);
-            int n = ch.read(bb);
-            if (n < 0) return -1;
+            int n = src.readAt(pos, b, off, want);
+            if (n <= 0) return -1;
             pos += n;
             return n;
         }

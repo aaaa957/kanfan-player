@@ -25,7 +25,8 @@
 | **外挂字幕** | 自动加载视频同名的 `.srt` / `.ass` / `.ssa` / `.vtt`，也可从任意位置手选；UTF-8 与 GBK 都能识别 |
 | **外挂弹幕** | 自动加载同名 B 站 `.xml` 弹幕；`弹幕` 按钮里可换文件或手选 `.xml` / `.ass`（弹弹play 导出） |
 | **看图** | 点文件夹里的 `jpg / png / webp / gif` 直接全屏查看；**左右切换（跟手拖拽）与连续下滑两种模式**；双指缩放、双击放大、放大后拖动 |
-| **解压** | 点文件夹里的 `.zip` 直接查看内容并解压：支持 ZipCrypto 与传统 WinZip AES 加密，需要密码时弹窗输入；7z / rar 会说明原因并交给其他应用 |
+| **解压** | 点文件夹里的 `.zip` / `.7z` / `.rar` 直接查看内容并解压：支持 ZipCrypto 与 WinZip AES 加密、rar5、7z（LZMA/LZMA2），以及 **rar / zip / 7z 三种分卷**；需要密码时弹窗输入 |
+| **压缩** | 管理页勾选文件 → 压缩成 ZIP：流式写入、Zip64、已是压缩格式的自动改存储；有进度、可取消，失败不留半截文件 |
 | **重命名** | 长按任意文件 → 重命名，可改扩展名（`x.mp4` → `x.zip` 直接当压缩包打开）；也可「用其他应用打开」交给系统处理 |
 | **管理 / 隐藏** | 管理页多选：首屏移除/拖动排序文件夹，目录内隐藏文件；首屏底部可一键恢复；长按可彻底删除 |
 | **阅读** | 点文件夹里的 `.txt` / `.epub` 直接进阅读器；**分页 / 滚动两种模式自选**（分页左滑右滑翻页，滚动连续加载）；章节识别、目录跳转、字号与三种背景、进度记忆；EPUB 的插图随文显示 |
@@ -194,6 +195,31 @@
 
 压缩包里如果所有文件都在同一个顶层目录下，会**自动剥掉这一层**，避免解出「番名/番名/01.mkv」。
 
+#### 分卷
+
+`name.part1.rar`、`name.z01…+name.zip`、`name.7z.001` 这些都能直接点开，
+**从第几卷点进去都一样**——会先归一到整组再读：
+
+| 命名 | 读取方式 |
+|---|---|
+| 分卷 zip（`.z01…` / `.zip.001`） | 各卷按序拼成一个逻辑文件，偏移本来就是相对整包的 |
+| 7z 切卷（`.7z.001`） | 原生层把多段 fd 虚拟拼接，跨卷读 |
+| rar 分卷（`.partN.rar` / `.rNN`） | 各卷按真实文件名软链到缓存目录，unrar 才能按名续卷 |
+
+列表里只保留主卷一行；少了一卷会提示「缺第 3 卷」。
+
+### 压缩
+
+管理页勾选文件 → **压缩** → 起个名字（默认 `<文件夹名>.zip`）→ 开始。
+
+- 流式写：边读边写，内存占用与文件大小无关
+- **Zip64**：单个文件或整包超过 4 GB 也能写
+- 视频 / 图片 / 音频 / 压缩包这类已经压过的内容自动改用**存储**，不浪费 CPU
+- 可取消；失败或取消会把没写完的文件删掉
+
+格式固定为 ZIP：RAR 的压缩算法是专有授权（开源实现只能解压），7z 要另写编码器，
+而这两者对视频的压缩收益都接近 0。
+
 **关于原生库**：7z 与 rar 不是 Java 实现的，而是用 NDK 把
 [7-Zip](https://www.7-zip.org/) 的 C 解码器与 [unrar](https://www.rarlab.com/) 编译成
 `lib/arm64-v8a/libkanfan.so` 与 `lib/armeabi-v7a/libkanfan.so`（约 760 KB / 586 KB）。
@@ -222,13 +248,13 @@
 | 文件 | 行数 | 职责 |
 |---|---:|---|
 | `PlayerActivity.java` | 1289 | 播放器本体：MediaPlayer + SurfaceView、手势分发、连播、进度记忆、控制条、外挂字幕/弹幕接线 |
-| `MainActivity.java` | 1564 | 片库：目录授权、分层浏览、缩略图、长按重命名、用其他应用打开 |
-| `ArchiveActivity.java` | 732 | 压缩包：条目列表、密码弹窗、目标选择、进度与取消 |
+| `MainActivity.java` | 2063 | 片库：目录授权、分层浏览、缩略图、管理页（隐藏/拖动排序/压缩）、长按重命名 |
+| `ArchiveActivity.java` | 1142 | 压缩包：条目列表、密码弹窗、目标选择、进度与取消、分卷归一 |
 | `ImageActivity.java` | 458 | 看图：同目录列表、两种模式切换、预解码、GIF 动图 |
 | `PagerLayout.java` | 343 | 左右翻页容器：跟手拖动、松手吸附、边缘阻尼、三槽位复用 |
 | `ImageColumn.java` | 241 | 上下滑动看图：整列铺开 + 视口窗口化解码 |
 | `ReaderActivity.java` | 1075 | 阅读器：分页（StaticLayout 测量）/ 连续滚动两种模式、字号/背景/进度、EPUB 插图 |
-| `Scan.java` | 345 | SAF 目录遍历：视频与书籍列表、同目录文件枚举、文本读取（UTF-8/GBK） |
+| `Scan.java` | 429 | SAF 目录遍历：分层列表、同目录文件枚举、文本读取（UTF-8/GBK） |
 | `Epub.java` | 310 | EPUB 解析：container → OPF → spine / 目录 / 插图，纯 Java |
 | `Sub.java` | 206 | 字幕解析：SRT / VTT / ASS，纯 Java |
 | `DanmakuView.java` | 194 | 弹幕渲染：按帧重绘、轨道分配、描边文字 |
@@ -238,8 +264,10 @@
 | `Nav.java` | 89 | 纯逻辑：把一堆相对路径折叠成某一层的子目录与直属内容 |
 | `Store.java` | 81 | SharedPreferences：播放位置、阅读进度、字号/背景/阅读方式、已添加目录 |
 | `ZoomView.java` | 192 | 单张图画布：双击/双指缩放、放大后拖动 |
-| `Zip.java` | 616 | zip 读取：中央目录 / ZIP64 / deflate / ZipCrypto / WinZip AES（纯 Java） |
-| `Nat.java` | 52 | 原生解压的 Java 绑定（rar / 7z） |
+| `Zip.java` | 717 | zip 读取：中央目录 / ZIP64 / deflate / ZipCrypto / WinZip AES，可跨分卷（纯 Java） |
+| `ZipWrite.java` | 371 | zip 写入：流式、Zip64、UTF-8 名、进度与取消（纯 Java） |
+| `Vols.java` | 228 | 分卷命名识别：`partN.rar` / `.rNN` / `.zNN` / `.001`，纯 Java |
+| `Nat.java` | 47 | 原生解压的 Java 绑定（rar / 7z，支持多卷拼接） |
 | `Saf.java` | 118 | SAF 写入：建目录、建文件、MIME 推断 |
 | `Swipe.java` | 58 | 翻页判定算术：位移阈值、甩动速度、边缘阻尼（纯 Java） |
 | `Pager.java` | 70 | 分页测量：给定起点算出一页能放多少字（插图不跨页切断） |
@@ -312,6 +340,10 @@ javac -d out/tests \
   app/java/com/kanfan/player/Split.java \
   app/java/com/kanfan/player/Epub.java \
   app/java/com/kanfan/player/Flow.java \
+  app/java/com/kanfan/player/Swipe.java \
+  app/java/com/kanfan/player/Vols.java \
+  app/java/com/kanfan/player/Zip.java \
+  app/java/com/kanfan/player/ZipWrite.java \
   tests/*.java
 
 java -cp out/tests NavTest      # 目录折叠
@@ -322,9 +354,12 @@ java -cp out/tests EpubTest     # EPUB 解析（测试里现场打包一个 epub
 java -cp out/tests FlowTest     # 滚动窗口的偏移与裁剪
 java -cp out/tests SwipeTest    # 翻页判定：阈值、甩动、边缘阻尼
 java -cp out/tests ZipTest D:/tmp/ziptest   # 真实 zip：普通/存储/ZipCrypto/AES256/deflate+加密
+java -cp out/tests VolsTest     # 分卷命名：partN / rNN / zNN / 001，排序与缺卷
+java -cp out/tests ZipVolTest   # 分卷 zip：现场切卷，跨卷读、缺卷报错
+java -cp out/tests ZipWriteTest # 压缩：存储/deflate/Zip64/UTF-8 名/取消，产物交给 7z t
 ```
 
-**245 项用例**，目前全部通过：
+**309 项用例**，目前全部通过：
 
 | 用例 | 数量 | 重点覆盖 |
 |---|---:|---|
@@ -336,6 +371,9 @@ java -cp out/tests ZipTest D:/tmp/ziptest   # 真实 zip：普通/存储/ZipCryp
 | `FlowTest` | 24 | 章节定位的边界、章内比例、裁剪后偏移平移、无效裁剪 |
 | `SwipeTest` | 26 | 翻页阈值、甩动速度方向、首尾边界、阻尼系数、吸附目标与动画时长 |
 | `ZipTest` | 57 | 用 7-Zip 现场生成的 5 种 zip 逐字节比对；错密码必须被拒；坏文件必须抛错 |
+| `VolsTest` | 30 | 新式/旧式 rar、`.z01` 分卷、7-Zip 切卷的归组与排序；`part10` 按数值排；缺卷提示 |
+| `ZipVolTest` | 8 | 把完整 zip 切成 2/3 卷（切点故意不对齐）后跨卷读；少一卷必须报错 |
+| `ZipWriteTest` | 26 | 写出来的包交给 `7z t` 校验；deflate/store、Zip64、未知大小、两万条目、取消 |
 
 > UI 与播放链路仍没有自动化测试 —— 这台开发机上没有安卓设备也没有模拟器，只能装机手测。
 > 分页测量依赖 `StaticLayout`，属 Android 运行时，未纳入 JVM 用例。
@@ -389,7 +427,10 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - ASS 字幕只取「时间 + 文本」，复杂特效（字体定位、卡拉OK、绘图）会退化成普通居中文本
 - 弹幕不支持代码弹幕 / BAS 等高级类型；ASS 弹幕统一按滚动处理，不还原位置与动画
 - 阅读器**不解析 EPUB 的 CSS**：字体、缩进、图文混排等版式不还原，只保留段落 / 标题 / 粗斜体 / 图片
-- **不支持 7z / rar 解压**（系统无解码器，纯 Java 实现不现实），只能交给其他应用
+- **压缩只能存成 ZIP**：rar 的压缩算法是专有授权，7z 需要另写编码器（目前只有解码器）
+- 分卷只认标准命名（`partN.rar` / `.rNN` / `.zNN` / `.###`）；被改过名的分卷认不出来
+- 极少数不让建软链的存储上，rar 分卷会退回「先复制副本再解」，会多占一份空间
+- 加密的 7z、以及单个文件超过可用内存的 7z 固态块，解不了
 - 重命名只支持文件，暂不支持文件夹；改成不认识的后缀后，文件会从列表里消失（磁盘上还在）
 - 解压需要目录的**写入**权限：v2.2 之前添加的文件夹只有读权限，需要移除后重新添加一次
 - 看图不支持旋转与「保存为」，GIF 在 Android 8 及以下只能看第一帧

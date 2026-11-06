@@ -68,6 +68,18 @@ static std::string jstr(JNIEnv* env, jstring s) {
     return out;
 }
 
+static std::vector<std::string> jstrArray(JNIEnv* env, jobjectArray arr) {
+    std::vector<std::string> out;
+    if (arr == NULL) return out;
+    jsize n = env->GetArrayLength(arr);
+    for (jsize i = 0; i < n; i++) {
+        jstring s = (jstring) env->GetObjectArrayElement(arr, i);
+        out.push_back(jstr(env, s));
+        if (s != NULL) env->DeleteLocalRef(s);
+    }
+    return out;
+}
+
 /* ===================== 7z ===================== */
 
 static void* szAlloc(ISzAllocPtr p, size_t size) {
@@ -84,7 +96,9 @@ static const ISzAlloc g_alloc = { szAlloc, szFree };
 
 struct FileIn {
     ILookInStream vt;
-    int fd;
+    // 分卷：多段 fd 按顺序拼成一个逻辑文件；单卷就是长度 1
+    std::vector<int> fds;
+    std::vector<Int64> starts;   // starts[i] 起，starts[i+1] 止；最后一项是总长
     Byte* buf;
     size_t pos;
     size_t len;
@@ -92,13 +106,33 @@ struct FileIn {
     Int64 fileSize;
 };
 
+/** 跨段读：从逻辑位置 pos 读 want 字节，遇到卷边界自动换下一卷 */
+static ssize_t fileInReadAt(FileIn* s, Byte* buf, size_t want, Int64 pos) {
+    size_t done = 0;
+    while (done < want && pos < s->fileSize) {
+        size_t i = 0;
+        while (i + 1 < s->starts.size() && pos >= s->starts[i + 1]) i++;
+        if (i >= s->fds.size()) break;
+        Int64 off = pos - s->starts[i];
+        Int64 cap = s->starts[i + 1] - pos;
+        size_t n = want - done;
+        if ((Int64) n > cap) n = (size_t) cap;
+        if (n == 0) break;
+        ssize_t r = pread64(s->fds[i], buf + done, n, (off64_t) off);
+        if (r <= 0) break;
+        done += (size_t) r;
+        pos += r;
+    }
+    return (ssize_t) done;
+}
+
 static SRes fileInRefill(FileIn* s) {
     if (s->filePos >= s->fileSize) {
         s->len = 0;
         s->pos = 0;
         return SZ_OK;
     }
-    ssize_t n = pread64(s->fd, s->buf, 1 << 16, (off64_t) s->filePos);
+    ssize_t n = fileInReadAt(s, s->buf, 1 << 16, s->filePos);
     if (n < 0) return SZ_ERROR_READ;
     s->len = (size_t) n;
     s->pos = 0;
@@ -170,17 +204,22 @@ static SRes fileInSeek(ILookInStreamPtr pp, Int64* pos, ESzSeek origin) {
     return SZ_OK;
 }
 
-static void fileInInit(FileIn* s, int fd) {
-    memset(s, 0, sizeof(FileIn));
-    s->fd = fd;
+static void fileInInit(FileIn* s, const std::vector<int>& fds) {
+    s->fds = fds;
+    s->starts.assign(fds.size() + 1, 0);
+    for (size_t i = 0; i < fds.size(); i++) {
+        off64_t sz = lseek64(fds[i], 0, SEEK_END);
+        s->starts[i + 1] = s->starts[i] + (sz < 0 ? 0 : (Int64) sz);
+    }
+    s->fileSize = s->starts.empty() ? 0 : s->starts[s->starts.size() - 1];
     s->buf = (Byte*) malloc(1 << 16);
+    s->pos = 0;
+    s->len = 0;
+    s->filePos = 0;
     s->vt.Look = fileInLook;
     s->vt.Skip = fileInSkip;
     s->vt.Read = fileInRead;
     s->vt.Seek = fileInSeek;
-    off64_t sz = lseek64(fd, 0, SEEK_END);
-    s->fileSize = sz < 0 ? 0 : (Int64) sz;
-    s->filePos = 0;
 }
 
 /* ===================== RAR ===================== */
@@ -233,7 +272,8 @@ Java_com_kanfan_player_Nat_rarList(JNIEnv* env, jclass, jstring jpath, jstring j
     RAROpenArchiveDataEx data;
     memset(&data, 0, sizeof(data));
     data.ArcName = (char*) path.c_str();
-    data.OpenMode = RAR_OM_LIST;
+    // INCSPLIT：分卷要连着列，不然只列到第一卷为止
+    data.OpenMode = RAR_OM_LIST | RAR_OM_LIST_INCSPLIT;
 
     HANDLE h = RAROpenArchiveEx(&data);
     if (h == NULL) {
@@ -346,8 +386,7 @@ Java_com_kanfan_player_Nat_rarExtractAll(JNIEnv* env, jclass, jstring jpath, jst
 
 /* 7z：把打开的归档和「固态块缓存」留住，避免每个文件都重解整块 */
 struct SzCtx {
-    std::string path;
-    int fd;
+    std::string key;   // 各卷路径拼起来，用来判断是否同一个归档
     FileIn fs;
     CSzArEx db;
     bool opened;
@@ -356,7 +395,7 @@ struct SzCtx {
     size_t outBufSize;
 };
 
-static SzCtx g_sz = { std::string(), -1, {}, {}, false, 0xFFFFFFFF, NULL, 0 };
+static SzCtx g_sz = { std::string(), {}, {}, false, 0xFFFFFFFF, NULL, 0 };
 
 static void szCloseCtx() {
     if (g_sz.opened) {
@@ -373,28 +412,41 @@ static void szCloseCtx() {
         free(g_sz.fs.buf);
         g_sz.fs.buf = NULL;
     }
-    if (g_sz.fd >= 0) {
-        close(g_sz.fd);
-        g_sz.fd = -1;
+    for (size_t i = 0; i < g_sz.fs.fds.size(); i++) {
+        if (g_sz.fs.fds[i] >= 0) close(g_sz.fs.fds[i]);
     }
-    g_sz.path.clear();
+    g_sz.fs.fds.clear();
+    g_sz.fs.starts.clear();
+    g_sz.key.clear();
 }
 
-static SRes szEnsureOpen(const std::string& path) {
-    if (g_sz.opened && g_sz.path == path) return SZ_OK;
+static SRes szEnsureOpen(const std::vector<std::string>& paths) {
+    std::string key;
+    for (size_t i = 0; i < paths.size(); i++) {
+        key += paths[i];
+        key += "\n";
+    }
+    if (g_sz.opened && g_sz.key == key) return SZ_OK;
     szCloseCtx();
+    if (paths.empty()) return SZ_ERROR_READ;
 
-    int fd = open(path.c_str(), O_RDONLY);
-    if (fd < 0) return SZ_ERROR_READ;
-    g_sz.fd = fd;
-    g_sz.path = path;
-    fileInInit(&g_sz.fs, fd);
+    std::vector<int> fds;
+    for (size_t i = 0; i < paths.size(); i++) {
+        int fd = open(paths[i].c_str(), O_RDONLY);
+        if (fd < 0) {
+            for (size_t k = 0; k < fds.size(); k++) close(fds[k]);
+            return SZ_ERROR_READ;
+        }
+        fds.push_back(fd);
+    }
+    fileInInit(&g_sz.fs, fds);
     SzArEx_Init(&g_sz.db);
     SRes r = SzArEx_Open(&g_sz.db, &g_sz.fs.vt, &g_alloc, &g_alloc);
     if (r != SZ_OK) {
         szCloseCtx();
         return r;
     }
+    g_sz.key = key;
     g_sz.opened = true;
     return SZ_OK;
 }
@@ -402,9 +454,9 @@ static SRes szEnsureOpen(const std::string& path) {
 extern "C" {
 
 JNIEXPORT jstring JNICALL
-Java_com_kanfan_player_Nat_szList(JNIEnv* env, jclass, jstring jpath) {
-    std::string path = jstr(env, jpath);
-    SRes res = szEnsureOpen(path);
+Java_com_kanfan_player_Nat_szList(JNIEnv* env, jclass, jobjectArray jpaths) {
+    std::vector<std::string> paths = jstrArray(env, jpaths);
+    SRes res = szEnsureOpen(paths);
     if (res != SZ_OK) {
         char err[32];
         snprintf(err, sizeof(err), "E%d", (int) res);
@@ -433,12 +485,12 @@ Java_com_kanfan_player_Nat_szList(JNIEnv* env, jclass, jstring jpath) {
 }
 
 JNIEXPORT jint JNICALL
-Java_com_kanfan_player_Nat_szExtractOne(JNIEnv* env, jclass, jstring jpath, jint index,
+Java_com_kanfan_player_Nat_szExtractOne(JNIEnv* env, jclass, jobjectArray jpaths, jint index,
                                         jstring jdest) {
-    std::string path = jstr(env, jpath);
+    std::vector<std::string> paths = jstrArray(env, jpaths);
     std::string dest = jstr(env, jdest);
 
-    SRes res = szEnsureOpen(path);
+    SRes res = szEnsureOpen(paths);
     if (res != SZ_OK) return (int) res;
     if (index < 0 || (UInt32) index >= g_sz.db.NumFiles) return -2;
 

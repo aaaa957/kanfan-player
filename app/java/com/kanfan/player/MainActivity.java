@@ -21,6 +21,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.BaseAdapter;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -32,7 +33,9 @@ import android.widget.Toast;
 
 import android.media.MediaMetadataRetriever;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -60,11 +63,17 @@ public class MainActivity extends Activity {
 
     private ListView list;
     private TextView subtitle, manageBtn, addBtn, titleView;
-    private TextView allBtn, delBtn, doneBtn;
+    private TextView allBtn, delBtn, doneBtn, zipBtn;
     private LinearLayout manageBar;
     private ImageView backBtn;
     private TextView empty;
     private LinearLayout root;
+
+    // 压缩进度
+    private FrameLayout progressLayer;
+    private ProgressBar zipBar;
+    private TextView zipTitle, zipFile, zipCancel;
+    private volatile boolean zipping, zipCancelled;
 
     private final List<Row> rows = new ArrayList<>();
     private final List<Entry> all = new ArrayList<>();
@@ -220,7 +229,7 @@ public class MainActivity extends Activity {
         rebuildRows();
         Toast.makeText(this, stack.isEmpty()
                 ? "点圆圈选择文件夹，长按可拖动排序"
-                : "点圆圈选择文件，选好后点「隐藏」", Toast.LENGTH_SHORT).show();
+                : "点圆圈选择文件，选好后可以隐藏或压缩", Toast.LENGTH_SHORT).show();
     }
 
     private void exitManage() {
@@ -456,6 +465,14 @@ public class MainActivity extends Activity {
             }
         });
 
+        zipBtn = chip("压缩", false);
+        zipBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                compressSelected();
+            }
+        });
+
         header.addView(titleRow);
 
         subtitle = new TextView(this);
@@ -566,6 +583,10 @@ public class MainActivity extends Activity {
         manageBar.setVisibility(View.GONE);
         manageBar.addView(allBtn);
         manageBar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        LinearLayout.LayoutParams zlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        zlp.setMargins(0, 0, Ui.dp(this, 10), 0);
+        manageBar.addView(zipBtn, zlp);
         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         dlp.setMargins(0, 0, Ui.dp(this, 10), 0);
@@ -581,8 +602,289 @@ public class MainActivity extends Activity {
         root.addView(empty, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        setContentView(root);
+        FrameLayout shell = new FrameLayout(this);
+        shell.addView(root, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        buildZipProgress(shell);
+        setContentView(shell);
         refreshHeaderState();
+    }
+
+    /** 压缩进度：盖在整页之上，可取消 */
+    private void buildZipProgress(FrameLayout shell) {
+        progressLayer = new FrameLayout(this);
+        progressLayer.setBackgroundColor(0xE6000000);
+        progressLayer.setVisibility(View.GONE);
+        progressLayer.setClickable(true);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(Ui.dp(this, 26), Ui.dp(this, 24), Ui.dp(this, 26), Ui.dp(this, 18));
+        box.setBackground(Ui.round(this, getColor(R.color.surface), 18f));
+
+        zipTitle = new TextView(this);
+        zipTitle.setText("正在压缩");
+        zipTitle.setTextColor(getColor(R.color.text));
+        zipTitle.setTextSize(15f);
+        zipTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(zipTitle);
+
+        zipBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        zipBar.setMax(100);
+        zipBar.setProgress(0);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 6));
+        blp.topMargin = Ui.dp(this, 14);
+        box.addView(zipBar, blp);
+
+        zipFile = new TextView(this);
+        zipFile.setTextColor(getColor(R.color.dim));
+        zipFile.setTextSize(12f);
+        zipFile.setSingleLine(true);
+        zipFile.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        LinearLayout.LayoutParams flp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        flp.topMargin = Ui.dp(this, 10);
+        box.addView(zipFile, flp);
+
+        zipCancel = new TextView(this);
+        zipCancel.setText("取消");
+        zipCancel.setTextColor(getColor(R.color.text));
+        zipCancel.setTextSize(13.5f);
+        zipCancel.setGravity(Gravity.CENTER);
+        zipCancel.setPadding(Ui.dp(this, 18), Ui.dp(this, 9), Ui.dp(this, 18), Ui.dp(this, 9));
+        zipCancel.setBackground(Ui.round(this, getColor(R.color.surface2), 18f));
+        zipCancel.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                zipCancelled = true;
+                zipTitle.setText("正在停止…");
+            }
+        });
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = Ui.dp(this, 16);
+        clp.gravity = Gravity.END;
+        box.addView(zipCancel, clp);
+
+        progressLayer.addView(box, new FrameLayout.LayoutParams(
+                Ui.dp(this, 300), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        shell.addView(progressLayer, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    }
+
+    // ---------------- 压缩 ----------------
+
+    private void compressSelected() {
+        if (zipping) return;
+        if (selected.isEmpty()) {
+            Toast.makeText(this, "先点圆圈选中要压缩的文件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final List<Entry> picked = new ArrayList<>();
+        for (Row r : rows) {
+            if (r.item != null && selected.contains(r.key)) picked.add(r.item);
+        }
+        if (picked.isEmpty()) {
+            Toast.makeText(this, "压缩要在文件夹里选文件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        final String folder = stack.isEmpty() ? "压缩包" : stack.get(stack.size() - 1).name;
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setText(suggestZipName(folder));
+        input.setSelection(input.getText().length());
+        input.setTextColor(getColor(R.color.text));
+        input.setHintTextColor(getColor(R.color.dim));
+        input.setHint("压缩包名字");
+
+        final CheckBox storeOnly = new CheckBox(this);
+        storeOnly.setText("仅打包，不压缩（更快）");
+        storeOnly.setTextColor(getColor(R.color.dim));
+        storeOnly.setTextSize(13f);
+        storeOnly.setChecked(false);
+
+        TextView note = new TextView(this);
+        note.setText("格式为 ZIP，任何设备都能打开。\n"
+                + "rar 的压缩算法是专有授权，只能解不能压；7z 对视频也没有压缩收益。");
+        note.setTextColor(getColor(R.color.dim));
+        note.setTextSize(11.5f);
+        note.setLineSpacing(0, 1.4f);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int p = Ui.dp(this, 20);
+        box.setPadding(p, Ui.dp(this, 6), p, 0);
+        box.addView(input);
+        box.addView(storeOnly);
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        nlp.topMargin = Ui.dp(this, 4);
+        box.addView(note, nlp);
+
+        new AlertDialog.Builder(this)
+                .setTitle("压缩 " + picked.size() + " 个文件")
+                .setView(box)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("开始", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        String name = input.getText().toString().trim();
+                        if (name.isEmpty()) name = suggestZipName(folder);
+                        if (!name.toLowerCase(Locale.US).endsWith(".zip")) name += ".zip";
+                        final String outName = name;
+                        String rel = stack.isEmpty() ? "" : stack.get(stack.size() - 1).rel;
+                        if (nameTaken(outName, rel)) {
+                            new AlertDialog.Builder(MainActivity.this)
+                                    .setMessage("已经有「" + outName + "」了，要覆盖吗？")
+                                    .setNegativeButton("取消", null)
+                                    .setPositiveButton("覆盖", new android.content.DialogInterface.OnClickListener() {
+                                        @Override
+                                        public void onClick(android.content.DialogInterface d2, int w2) {
+                                            startZip(picked, outName, storeOnly.isChecked());
+                                        }
+                                    })
+                                    .show();
+                            return;
+                        }
+                        startZip(picked, outName, storeOnly.isChecked());
+                    }
+                })
+                .show();
+    }
+
+    /** 默认名：文件夹名.zip；同一目录里重名就加 (2) */
+    private String suggestZipName(String folder) {
+        String base = folder == null ? "压缩包" : folder.trim();
+        if (base.isEmpty()) base = "压缩包";
+        String rel = stack.isEmpty() ? "" : stack.get(stack.size() - 1).rel;
+        String name = base + ".zip";
+        for (int i = 2; i <= 99; i++) {
+            if (!nameTaken(name, rel)) return name;
+            name = base + " (" + i + ").zip";
+        }
+        return base + ".zip";
+    }
+
+    private boolean nameTaken(String name, String rel) {
+        for (Entry e : all) {
+            if (name.equalsIgnoreCase(e.name) && rel.equals(e.relPath)) return true;
+        }
+        return false;
+    }
+
+    private void startZip(final List<Entry> picked, final String outName, final boolean storeOnly) {
+        zipping = true;
+        zipCancelled = false;
+        progressLayer.setVisibility(View.VISIBLE);
+        zipTitle.setText("正在压缩");
+        zipBar.setProgress(0);
+        zipFile.setText(outName);
+
+        final long total;
+        long sum = 0;
+        for (Entry e : picked) sum += Math.max(0, e.size);
+        total = sum;
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Uri doc = null;
+                String err = null;
+                Uri tree = Uri.parse(picked.get(0).tree);
+                try {
+                    Uri parent = Saf.parentDocument(tree, picked.get(0).uri);
+                    doc = Saf.createFile(getContentResolver(), tree, parent, outName);
+                    if (doc == null) throw new IOException("建不了文件");
+                    OutputStream os = Saf.openOut(getContentResolver(), doc);
+                    ZipWrite w = new ZipWrite(os, storeOnly ? 0 : 6, new ZipWrite.Listener() {
+                        private long last;
+
+                        @Override
+                        public void onProgress(final String name, final long done, final long all) {
+                            long now = System.currentTimeMillis();
+                            if (now - last < 120) return;
+                            last = now;
+                            ui.post(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (!zipping) return;
+                                    zipFile.setText(name);
+                                    int pct = all > 0 ? (int) (done * 100 / all) : 0;
+                                    zipBar.setProgress(Math.min(99, pct));
+                                }
+                            });
+                        }
+
+                        @Override
+                        public boolean cancelled() {
+                            return zipCancelled;
+                        }
+                    });
+                    w.setTotal(total);
+                    for (Entry e : picked) {
+                        if (zipCancelled) throw new IOException("已取消");
+                        w.add(sourceOf(e));
+                    }
+                    w.close();
+                } catch (Throwable t) {
+                    err = t.getMessage() == null ? "压缩失败" : t.getMessage();
+                    if (doc != null) {
+                        try {
+                            android.provider.DocumentsContract.deleteDocument(
+                                    getContentResolver(), doc);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+                final String fe = err;
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        zipping = false;
+                        progressLayer.setVisibility(View.GONE);
+                        if (fe != null) {
+                            Toast.makeText(MainActivity.this,
+                                    zipCancelled ? "已取消，未生成压缩包" : fe,
+                                    Toast.LENGTH_LONG).show();
+                            return;
+                        }
+                        selected.clear();
+                        manageMode = false;
+                        rescan();
+                        Toast.makeText(MainActivity.this, "已压缩成 " + outName,
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private ZipWrite.Source sourceOf(final Entry e) {
+        return new ZipWrite.Source() {
+            @Override
+            public String name() {
+                return e.name;
+            }
+
+            @Override
+            public long size() {
+                return e.size > 0 ? e.size : -1;
+            }
+
+            @Override
+            public long time() {
+                return 0;
+            }
+
+            @Override
+            public InputStream open() throws IOException {
+                InputStream in = getContentResolver().openInputStream(e.uri);
+                if (in == null) throw new IOException("读不到 " + e.name);
+                return in;
+            }
+        };
     }
 
     private TextView chip(String text, boolean primary) {
@@ -609,6 +911,10 @@ public class MainActivity extends Activity {
         manageBtn.setVisibility(!manageMode && !folders.isEmpty() ? View.VISIBLE : View.GONE);
 
         if (manageBar != null) manageBar.setVisibility(manageMode ? View.VISIBLE : View.GONE);
+        if (zipBtn != null) {
+            zipBtn.setVisibility(manageMode && !atRoot ? View.VISIBLE : View.GONE);
+            zipBtn.setText(selected.isEmpty() ? "压缩" : "压缩(" + selected.size() + ")");
+        }
         if (manageMode) {
             List<String> keys = selectableKeys();
             allBtn.setText(!keys.isEmpty() && selected.containsAll(keys) ? "取消全选" : "全选");
@@ -918,8 +1224,17 @@ public class MainActivity extends Activity {
         refreshHeaderState();
         if (manageMode) {
             titleView.setText("看番");
-            subtitle.setText(String.format(Locale.US, "已选 %d / %d 个文件夹 · 长按可拖动排序",
-                    selected.size(), folders.size()));
+            if (stack.isEmpty()) {
+                subtitle.setText(String.format(Locale.US, "已选 %d / %d 个文件夹 · 长按可拖动排序",
+                        selected.size(), folders.size()));
+            } else {
+                int n = 0;
+                for (Row r : rows) {
+                    if (r.item != null) n++;
+                }
+                subtitle.setText(String.format(Locale.US, "已选 %d / %d 个文件 · 可隐藏或压缩",
+                        selected.size(), n));
+            }
             return;
         }
         long size = 0;
@@ -966,6 +1281,11 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (zipping) {
+            zipCancelled = true;
+            zipTitle.setText("正在停止…");
+            return;
+        }
         if (manageMode) {
             exitManage();
             return;

@@ -33,11 +33,11 @@ public final class Nat {
     /** 返回 0 成功，否则 unrar 错误码 */
     public static native int rarExtractAll(String path, String pwd, String tmpDir, Sink sink);
 
-    /** 返回 "OK\nsize\tisdir\tname..."；失败返回 "E数字" */
-    public static native String szList(String path);
+    /** 返回 "OK\nsize\tisdir\tname..."；失败返回 "E数字"。paths 是分卷按序的路径 */
+    public static native String szList(String[] paths);
 
     /** 把第 index 个条目解到 outFile，返回 0 成功（内部会缓存固态块） */
-    public static native int szExtractOne(String path, int index, String outFile);
+    public static native int szExtractOne(String[] paths, int index, String outFile);
 
     /** 释放 7z 打开状态与块缓存 */
     public static native void szClose();
