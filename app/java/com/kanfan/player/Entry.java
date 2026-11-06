@@ -2,6 +2,8 @@ package com.kanfan.player;
 
 import android.net.Uri;
 
+import java.util.Locale;
+
 /** 片库里的一条内容：视频或书籍（txt / epub） */
 public class Entry {
 
@@ -9,6 +11,7 @@ public class Entry {
     public static final int BOOK = 1;
     public static final int IMAGE = 2;
     public static final int ARCHIVE = 3;
+    public static final int OTHER = 4;
 
     public long id;
     public int kind = VIDEO;
@@ -38,5 +41,20 @@ public class Entry {
 
     public boolean isArchive() {
         return kind == ARCHIVE;
+    }
+
+    public boolean isOther() {
+        return kind == OTHER;
+    }
+
+    /** 带扩展名的主文件名 */
+    public String stem() {
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(0, dot) : name;
+    }
+
+    public String ext() {
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(dot + 1).toLowerCase(Locale.US) : "";
     }
 }

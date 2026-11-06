@@ -37,6 +37,12 @@ public class Scan {
 
     private static final String[] ARCHIVE_EXT = {".zip", ".7z", ".rar"};
 
+    /** 不适合当媒体打开、但可能想用别的应用看看的类型 */
+    private static final String[] OTHER_EXT = {
+            ".apk", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".tar", ".gz", ".bz2", ".xz", ".iso", ".torrent", ".m3u8"
+    };
+
     private static final String[] IMAGE_EXT = {
             ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif", ".avif"
     };
@@ -64,6 +70,15 @@ public class Scan {
         if (name == null) return false;
         String n = name.toLowerCase(Locale.US);
         for (String e : ARCHIVE_EXT) {
+            if (n.endsWith(e)) return true;
+        }
+        return false;
+    }
+
+    public static boolean isOther(String name) {
+        if (name == null) return false;
+        String n = name.toLowerCase(Locale.US);
+        for (String e : OTHER_EXT) {
             if (n.endsWith(e)) return true;
         }
         return false;
@@ -141,12 +156,16 @@ public class Scan {
                 long size = cur.isNull(iSize) ? 0 : cur.getLong(iSize);
                 if (DIR_MIME.equals(mime)) {
                     dirs.add(new String[]{id, name});
-                } else if (isVideo(name, mime) || isBook(name) || isImage(name) || isArchive(name)) {
+                } else if (isVideo(name, mime) || isBook(name) || isImage(name)
+                        || isArchive(name) || isOther(name)) {
                     Entry v = new Entry();
-                    if (isVideo(name, mime)) v.kind = Entry.VIDEO;
-                    else if (isBook(name)) v.kind = Entry.BOOK;
+                    // 扩展名优先于 MIME：改名后有些提供方仍返回旧 MIME，
+                    // 若按 MIME 判断，把 .mp4 改成 .zip 会被当成视频打不开
+                    if (isBook(name)) v.kind = Entry.BOOK;
                     else if (isImage(name)) v.kind = Entry.IMAGE;
-                    else v.kind = Entry.ARCHIVE;
+                    else if (isArchive(name)) v.kind = Entry.ARCHIVE;
+                    else if (isOther(name)) v.kind = Entry.OTHER;
+                    else v.kind = Entry.VIDEO;
                     v.name = name == null ? "" : name;
                     v.title = Ui.prettyTitle(v.name);
                     v.relPath = rel;

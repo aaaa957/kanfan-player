@@ -85,6 +85,14 @@ public class NavTest {
         check("四类/A 压缩包", d7.get(0).archiveCount, 2);
         check("四类/A 总数", d7.get(0).count, 5);
 
+        // kind=4 其他文件，不能混进视频数
+        int[] fiveKinds = {0, 4, 4, 4};
+        List<Nav.Dir> d8 = Nav.subdirsOf("", new String[]{"A", "A", "A", "A"},
+                new long[]{1, 2, 3, 4}, fiveKinds);
+        check("其他/A 视频", d8.get(0).videoCount, 1);
+        check("其他/A 其他文件", d8.get(0).otherCount, 3);
+        check("其他/A 压缩包", d8.get(0).archiveCount, 0);
+
         // 6) 空输入不炸
         check("空输入/子目录", Nav.subdirsOf("", new String[0], new long[0]).size(), 0);
         check("空输入/直属", Nav.directOf("", null).length, 0);

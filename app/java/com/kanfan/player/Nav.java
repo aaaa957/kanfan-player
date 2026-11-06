@@ -20,6 +20,7 @@ public final class Nav {
         public int bookCount;
         public int imageCount;
         public int archiveCount;
+        public int otherCount;
 
         Dir(String name, String rel) {
             this.name = name;
@@ -73,6 +74,7 @@ public final class Nav {
             if (kinds != null && i < kinds.length && kinds[i] == 1) d.bookCount++;
             else if (kinds != null && i < kinds.length && kinds[i] == 2) d.imageCount++;
             else if (kinds != null && i < kinds.length && kinds[i] == 3) d.archiveCount++;
+            else if (kinds != null && i < kinds.length && kinds[i] == 4) d.otherCount++;
             else d.videoCount++;
         }
         return new ArrayList<Dir>(map.values());

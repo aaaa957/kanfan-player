@@ -21,6 +21,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.BaseAdapter;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -54,7 +55,7 @@ public class MainActivity extends Activity {
     private static final String KEY_TREES = "trees";        // 旧格式：StringSet（无序）
     private static final String KEY_ORDER = "trees_order";  // 新格式：按行存储，保留顺序
 
-    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3, T_IMAGE = 4, T_ARCHIVE = 5;
+    private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3, T_IMAGE = 4, T_ARCHIVE = 5, T_OTHER = 6;
 
     private ListView list;
     private TextView subtitle, manageBtn, addBtn, titleView;
@@ -404,6 +405,8 @@ public class MainActivity extends Activity {
                     openImage(r.item);
                 } else if (r.type == T_ARCHIVE && r.item != null) {
                     openArchive(r.item);
+                } else if (r.type == T_OTHER && r.item != null) {
+                    openOther(r.item);
                 }
             }
         });
@@ -412,10 +415,16 @@ public class MainActivity extends Activity {
         list.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
             @Override
             public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
-                if (!manageMode || position < 0 || position >= rows.size()) return false;
-                if (rows.get(position).type != T_DIR) return false;
-                dragPos = position;
-                view.setAlpha(0.45f);
+                if (position < 0 || position >= rows.size()) return false;
+                Row row = rows.get(position);
+                if (manageMode) {
+                    if (row.type != T_DIR) return false;
+                    dragPos = position;
+                    view.setAlpha(0.45f);
+                    return true;
+                }
+                if (row.type == T_HEADER || row.item == null) return false;
+                rowMenu(row);
                 return true;
             }
         });
@@ -603,13 +612,14 @@ public class MainActivity extends Activity {
     private void buildRootRows() {
         for (int i = 0; i < folders.size(); i++) {
             String[] f = folders.get(i);
-            int videos = 0, books = 0, images = 0, archives = 0;
+            int videos = 0, books = 0, images = 0, archives = 0, others = 0;
             long size = 0;
             for (Entry v : all) {
                 if (!f[0].equals(v.tree)) continue;
                 if (v.isBook()) books++;
                 else if (v.isImage()) images++;
                 else if (v.isArchive()) archives++;
+                else if (v.isOther()) others++;
                 else videos++;
                 size += v.size;
             }
@@ -620,13 +630,13 @@ public class MainActivity extends Activity {
             r.label = f[1];
             r.tree = f[0];
             r.rel = "";
-            r.sub = subText(videos, books, images, archives, size);
+            r.sub = subText(videos, books, images, archives, others, size);
             rows.add(r);
         }
     }
 
     /** 「52 个视频 · 3 本 · 13.4 GB」这样的副标题 */
-    private String subText(int videos, int books, int images, int archives, long size) {
+    private String subText(int videos, int books, int images, int archives, int others, long size) {
         StringBuilder sb = new StringBuilder();
         if (videos > 0) sb.append(videos).append(" 个视频");
         if (books > 0) {
@@ -640,6 +650,10 @@ public class MainActivity extends Activity {
         if (archives > 0) {
             if (sb.length() > 0) sb.append(" · ");
             sb.append(archives).append(" 个压缩包");
+        }
+        if (others > 0) {
+            if (sb.length() > 0) sb.append(" · ");
+            sb.append(others).append(" 个其他文件");
         }
         if (sb.length() == 0) return "空文件夹";
         return sb.append(" · ").append(sizeText(size)).toString();
@@ -681,7 +695,7 @@ public class MainActivity extends Activity {
                 r.label = d.name;
                 r.tree = cur.tree;
                 r.rel = d.rel;
-                r.sub = subText(d.videoCount, d.bookCount, d.imageCount, d.archiveCount, d.size);
+                r.sub = subText(d.videoCount, d.bookCount, d.imageCount, d.archiveCount, d.otherCount, d.size);
                 rows.add(r);
             }
         }
@@ -690,11 +704,13 @@ public class MainActivity extends Activity {
         List<Entry> books = new ArrayList<>();
         List<Entry> pics = new ArrayList<>();
         List<Entry> zips = new ArrayList<>();
+        List<Entry> others = new ArrayList<>();
         for (int idx : Nav.directOf(cur.rel, rels)) {
             Entry e = scoped.get(idx);
             if (e.isBook()) books.add(e);
             else if (e.isImage()) pics.add(e);
             else if (e.isArchive()) zips.add(e);
+            else if (e.isOther()) others.add(e);
             else videos.add(e);
         }
         java.util.Comparator<Entry> byTitle = new java.util.Comparator<Entry>() {
@@ -707,6 +723,7 @@ public class MainActivity extends Activity {
         Collections.sort(books, byTitle);
         Collections.sort(pics, byTitle);
         Collections.sort(zips, byTitle);
+        Collections.sort(others, byTitle);
 
         if (!videos.isEmpty()) {
             Row h = new Row();
@@ -759,6 +776,19 @@ public class MainActivity extends Activity {
                 rows.add(r);
             }
         }
+
+        if (!others.isEmpty()) {
+            Row h = new Row();
+            h.type = T_HEADER;
+            h.label = "其他文件";
+            rows.add(h);
+            for (Entry o : others) {
+                Row r = new Row();
+                r.type = T_OTHER;
+                r.item = o;
+                rows.add(r);
+            }
+        }
     }
 
     /** 体积文案：0 也要显示成「0 MB」，避免副标题出现空尾巴 */
@@ -786,7 +816,7 @@ public class MainActivity extends Activity {
             return;
         }
         long size = 0;
-        int videos = 0, books = 0, images = 0, archives = 0;
+        int videos = 0, books = 0, images = 0, archives = 0, others = 0;
         if (stack.isEmpty()) {
             titleView.setText("看番");
             for (Entry v : all) {
@@ -794,11 +824,12 @@ public class MainActivity extends Activity {
                 if (v.isBook()) books++;
                 else if (v.isImage()) images++;
                 else if (v.isArchive()) archives++;
+                else if (v.isOther()) others++;
                 else videos++;
             }
             if (folders.isEmpty()) subtitle.setText("还没有添加文件夹");
             else {
-                String cnt = subText(videos, books, images, archives, size);
+                String cnt = subText(videos, books, images, archives, others, size);
                 subtitle.setText(String.format(Locale.US, "%d 个文件夹 · %s",
                         folders.size(), cnt));
             }
@@ -811,11 +842,12 @@ public class MainActivity extends Activity {
                 if (v.isBook()) books++;
                 else if (v.isImage()) images++;
                 else if (v.isArchive()) archives++;
+                else if (v.isOther()) others++;
                 else videos++;
                 size += v.size;
             }
         }
-        subtitle.setText(subText(videos, books, images, archives, size));
+        subtitle.setText(subText(videos, books, images, archives, others, size));
     }
 
     private void goUp() {
@@ -878,6 +910,147 @@ public class MainActivity extends Activity {
         it.putExtra("tree", v.tree);
         it.putExtra("rel", v.relPath);
         startActivityForResult(it, REQ_ARCHIVE);
+    }
+
+    private void openOther(Entry v) {
+        try {
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(v.uri, Saf.mimeOf(v.name));
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(i);
+        } catch (Exception e) {
+            Toast.makeText(this, "没有能打开它的应用", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private View otherView(final Entry v) {
+        int pad = Ui.dp(this, 5);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(0, 0, 0, pad);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(Ui.dp(this, 9), Ui.dp(this, 9), Ui.dp(this, 14), Ui.dp(this, 9));
+        card.setBackground(Ui.round(this, getColor(R.color.surface), 14f));
+
+        FrameLayout box = new FrameLayout(this);
+        box.setBackground(Ui.round(this, Ui.alpha(getColor(R.color.dim), 0.14f), 12f));
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(R.drawable.ic_file);
+        ic.setColorFilter(getColor(R.color.dim));
+        int is = Ui.dp(this, 22);
+        box.addView(ic, new FrameLayout.LayoutParams(is, is, Gravity.CENTER));
+
+        int side = Ui.dp(this, 46);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(side, side);
+        blp.setMargins(0, 0, Ui.dp(this, 12), 0);
+        card.addView(box, blp);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        card.addView(col, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView name = new TextView(this);
+        name.setText(v.title);
+        name.setTextColor(getColor(R.color.text));
+        name.setTextSize(14f);
+        name.setMaxLines(2);
+        name.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+        col.addView(name);
+
+        TextView meta = new TextView(this);
+        String ext = v.ext().isEmpty() ? "文件" : v.ext().toUpperCase(Locale.US);
+        meta.setText(ext + " · " + Ui.fmtSize(v.size) + " · 长按可重命名");
+        meta.setTextColor(getColor(R.color.dim));
+        meta.setTextSize(11.5f);
+        meta.setPadding(0, Ui.dp(this, 4), 0, 0);
+        col.addView(meta);
+
+        wrap.addView(card, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return wrap;
+    }
+
+    // ---------------- 重命名 ----------------
+
+    private void rowMenu(final Row row) {
+        final Entry item = row.item;
+        if (item == null) return;
+        final String[] items = {"重命名", "用其他应用打开"};
+        new AlertDialog.Builder(this)
+                .setTitle(item.name)
+                .setItems(items, new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        if (which == 0) askRename(item);
+                        else openOther(item);
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void askRename(final Entry item) {
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setText(item.name);
+        input.setTextColor(getColor(R.color.text));
+        int dot = item.name.lastIndexOf('.');
+        if (dot > 0) input.setSelection(0, dot);       // 默认只选中主文件名，扩展名不动
+        else input.setSelection(0, item.name.length());
+
+        int pad = Ui.dp(this, 20);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(pad, Ui.dp(this, 8), pad, 0);
+        wrap.addView(input, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        new AlertDialog.Builder(this)
+                .setTitle("重命名")
+                .setMessage("改扩展名也能用：比如把 .mp4 改成 .zip 就能当压缩包打开。")
+                .setView(wrap)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("确定", new android.content.DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(android.content.DialogInterface d, int which) {
+                        doRename(item, input.getText().toString());
+                    }
+                })
+                .show();
+    }
+
+    private void doRename(final Entry item, String newName) {
+        newName = newName == null ? "" : newName.trim();
+        if (newName.isEmpty()) {
+            Toast.makeText(this, "名字不能为空", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (newName.indexOf('/') >= 0) {
+            Toast.makeText(this, "名字里不能有 /", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (newName.equals(item.name)) return;
+        try {
+            Uri out = android.provider.DocumentsContract.renameDocument(
+                    getContentResolver(), item.uri, newName);
+            if (out == null) {
+                Toast.makeText(this, "改不了这个名字", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Toast.makeText(this, "已改名为 " + newName, Toast.LENGTH_SHORT).show();
+            rescan();
+        } catch (SecurityException se) {
+            new AlertDialog.Builder(this)
+                    .setTitle("没有写入权限")
+                    .setMessage("这个文件夹当初只授权了读取。请到「管理」里移除它，"
+                            + "再重新添加一次（重新添加会同时获得写入权限）。")
+                    .setPositiveButton("知道了", null)
+                    .show();
+        } catch (Exception e) {
+            Toast.makeText(this, "改名失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     /** 图片行：方形缩略图 + 文件名 + 体积 */
@@ -1065,7 +1238,7 @@ public class MainActivity extends Activity {
 
         @Override
         public int getViewTypeCount() {
-            return 6;
+            return 7;
         }
 
         @Override
@@ -1086,6 +1259,7 @@ public class MainActivity extends Activity {
             if (r.type == T_BOOK) return bookView(r.item);
             if (r.type == T_IMAGE) return imageView(r.item);
             if (r.type == T_ARCHIVE) return archiveView(r.item);
+            if (r.type == T_OTHER) return otherView(r.item);
             return itemView(r.item);
         }
     }
