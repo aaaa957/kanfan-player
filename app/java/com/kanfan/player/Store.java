@@ -69,4 +69,13 @@ public class Store {
     public static void setTheme(Context c, int theme) {
         sp(c).edit().putInt("r_theme", theme).apply();
     }
+
+    /** 阅读方式：0 分页 / 1 连续滚动 */
+    public static int getReadMode(Context c) {
+        return sp(c).getInt("r_mode", 0);
+    }
+
+    public static void setReadMode(Context c, int mode) {
+        sp(c).edit().putInt("r_mode", mode).apply();
+    }
 }

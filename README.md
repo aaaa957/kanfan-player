@@ -4,11 +4,11 @@
 
 # 看番 · KanFan
 
-**一个 82 KB 的安卓本地视频播放器 · 顺手能看书的阅读器**
+**一个 90 KB 的安卓本地视频播放器 · 顺手能看书的阅读器**
 
 纯 Java + 系统原生 API · 零第三方依赖 · 无广告 · 无会员 · 不联网
 
-`Min SDK 23 (Android 6.0)` · `Target SDK 34` · `APK 82 KB`
+`Min SDK 23 (Android 6.0)` · `Target SDK 34` · `APK 90 KB`
 
 </div>
 
@@ -24,7 +24,7 @@
 | **倍速** | 0.5 / 0.75 / 1.0 / 1.25 / 1.5 / 2.0 六档，一键循环切换 |
 | **外挂字幕** | 自动加载视频同名的 `.srt` / `.ass` / `.ssa` / `.vtt`，也可从任意位置手选；UTF-8 与 GBK 都能识别 |
 | **外挂弹幕** | 自动加载同名 B 站 `.xml` 弹幕；`弹幕` 按钮里可换文件或手选 `.xml` / `.ass`（弹弹play 导出） |
-| **阅读** | 点文件夹里的 `.txt` / `.epub` 直接进阅读器：章节识别、目录跳转、字号与三种背景、阅读进度记忆；EPUB 的插图随文显示 |
+| **阅读** | 点文件夹里的 `.txt` / `.epub` 直接进阅读器；**分页 / 滚动两种模式自选**（分页左滑右滑翻页，滚动连续加载）；章节识别、目录跳转、字号与三种背景、进度记忆；EPUB 的插图随文显示 |
 | **画面** | 沉浸式全屏（隐藏状态栏 + 导航栏）、横屏、按原始比例居中不拉伸、播放时屏幕常亮 |
 | **其它** | 锁定防误触；控制条 3.5 秒自动隐藏 |
 
@@ -91,12 +91,22 @@
 - 插图从 zip 里就地解码，按屏宽等比缩放后插入正文
 - **不解析 CSS**：字体、缩进、复杂版式都不还原，只保留段落、标题、粗斜体、图片、列表
 
-**阅读体验**
+**两种阅读方式，自己选**（设置里切换，全局记住，默认分页）
 
-- 点正文显隐上下栏，滑动不受影响
-- 字号 13–30 可调；背景深色 / 米黄 / 浅色；设置全局记忆
-- 底部常驻「第 x / y 章 · 42%」，上一章 / 下一章一键切换
+| 方式 | 交互 |
+|---|---|
+| **分页** | 一屏一页，**左滑下一页 / 右滑上一页**；翻到章末自动进下一章；底部显示「第 x/y 章 · 第 p/q 页」 |
+| **滚动** | 连续下拉，滚到底部自动把下一章接上来，一直加载到全书结束；**不响应左右滑**（两种手势不混用） |
+
+- 点正文显隐上下栏
+- 字号 13–30、背景深色 / 米黄 / 浅色、阅读方式都全局记忆
 - 切后台或退出会记住「第几章 + 章内位置」，下次直接从那里继续
+
+> **分页怎么算**：用 `StaticLayout` 按真实排版测量（字号、行距、插图都算进去），不是按字数硬切；
+> 断点若落在插图中间，整张图挪到下一页。
+> **滚动为什么不一次塞整本**：这些轻小说的插图是 1384×2048 的 WebP，按屏宽解码单张约 7 MB，
+> 一本 21 张就是 150 MB。所以用**滑动窗口**——同时只保留最近 8 章（TXT）/ 3 章（EPUB），
+> 超出后从顶部裁掉，并按裁掉的高度等量回退滚动位置，视觉上不跳。连读十本也不会 OOM。
 
 > **真实数据实测**：拿 7 本实际在看的轻小说（每本 3–5 MB，`OEBPS/Text/*.xhtml` + `OEBPS/Images/*.webp`）
 > 跑解析器 —— 书名、21–27 章、每本 13–16 万字全部读出，插图 **165/165 全部命中**，
@@ -123,7 +133,7 @@
 |---|---:|---|
 | `PlayerActivity.java` | 1289 | 播放器本体：MediaPlayer + SurfaceView、手势分发、连播、进度记忆、控制条、外挂字幕/弹幕接线 |
 | `MainActivity.java` | 956 | 片库：目录授权、分层浏览（文件夹 / 视频 / 书籍）、缩略图异步加载 |
-| `ReaderActivity.java` | 678 | 阅读器：TXT 整章渲染、EPUB 逐章渲染（插图来自 zip）、字号/背景/进度 |
+| `ReaderActivity.java` | 1075 | 阅读器：分页（StaticLayout 测量）/ 连续滚动两种模式、字号/背景/进度、EPUB 插图 |
 | `Scan.java` | 330 | SAF 目录遍历：视频与书籍列表、同目录文件枚举、文本读取（UTF-8/GBK） |
 | `Epub.java` | 310 | EPUB 解析：container → OPF → spine / 目录 / 插图，纯 Java |
 | `Sub.java` | 206 | 字幕解析：SRT / VTT / ASS，纯 Java |
@@ -132,7 +142,9 @@
 | `Ui.java` | 125 | dp 换算、圆角/圆形背景、时长格式化、标题清洗、自然排序 |
 | `Split.java` | 101 | TXT 章节切分（`第X章` / `Chapter N` / 按字数兜底），纯 Java |
 | `Nav.java` | 89 | 纯逻辑：把一堆相对路径折叠成某一层的子目录与直属内容 |
-| `Store.java` | 72 | SharedPreferences：播放位置、阅读进度、字号与背景、已添加目录 |
+| `Store.java` | 81 | SharedPreferences：播放位置、阅读进度、字号/背景/阅读方式、已添加目录 |
+| `Pager.java` | 70 | 分页测量：给定起点算出一页能放多少字（插图不跨页切断） |
+| `Flow.java` | 64 | 滚动窗口算术：章节定位、章内比例、裁剪后偏移平移，纯 Java |
 | `Entry.java` | 32 | 数据模型：视频或书籍（`kind` + `relPath` + 所属 `tree`） |
 
 **为什么不用 ExoPlayer**：本地播放只需要 H.264/H.265 + AAC，系统 `MediaPlayer` 完全够用。放弃 ExoPlayer 换来的是 APK 从「十几 MB」降到 **82 KB**，启动零依赖加载。
@@ -200,6 +212,7 @@ javac -d out/tests \
   app/java/com/kanfan/player/Danmaku.java \
   app/java/com/kanfan/player/Split.java \
   app/java/com/kanfan/player/Epub.java \
+  app/java/com/kanfan/player/Flow.java \
   tests/*.java
 
 java -cp out/tests NavTest      # 目录折叠
@@ -207,9 +220,10 @@ java -cp out/tests SubTest      # 字幕解析
 java -cp out/tests DanmakuTest  # 弹幕解析
 java -cp out/tests SplitTest    # TXT 章节切分
 java -cp out/tests EpubTest     # EPUB 解析（测试里现场打包一个 epub）
+java -cp out/tests FlowTest     # 滚动窗口的偏移与裁剪
 ```
 
-**127 项用例**，目前全部通过：
+**151 项用例**，目前全部通过：
 
 | 用例 | 数量 | 重点覆盖 |
 |---|---:|---|
@@ -218,8 +232,10 @@ java -cp out/tests EpubTest     # EPUB 解析（测试里现场打包一个 epub
 | `DanmakuTest` | 22 | B站 XML 的三种模式与十进制颜色、HTML 实体、ASS 的 `\c&HBBGGRR&`、排序与坏行跳过 |
 | `SplitTest` | 22 | 中英文标题、首章前的序言、正文行不被误判为章节、无章节时按长度切块 |
 | `EpubTest` | 20 | container/OPF/spine、NCX 与 nav 两种目录、`../` 路径归一、图片字节、script/style 剔除 |
+| `FlowTest` | 24 | 章节定位的边界、章内比例、裁剪后偏移平移、无效裁剪 |
 
 > UI 与播放链路仍没有自动化测试 —— 这台开发机上没有安卓设备也没有模拟器，只能装机手测。
+> 分页测量依赖 `StaticLayout`，属 Android 运行时，未纳入 JVM 用例。
 
 ---
 
