@@ -183,6 +183,37 @@
 
 ---
 
+## v3.2 — 2026-11-07
+
+### KiriKiri（KRKR / TVP）也能跑了
+
+- 引擎：[krkrsdl2](https://github.com/uyjulian/krkrsdl2)（吉里吉里Z 的 SDL2 移植，MIT；内核 krkrz，BSD 系）
+- CMake + NDK 编成 `libmain.so`（strip 后 7.7 MB）+ `libSDL2.so`（1.5 MB）
+- Android 胶水用 SDL2 官方的 `org.libsdl.app.SDLActivity`（原样引入），只加了一个 30 行的
+  `KrkrActivity` 把游戏路径作为参数传进去
+
+### KRKR 的硬约束：必须先导入
+
+引擎只认真实文件路径（open / seek / 写 `savedata`），SAF 的 `content://` 接不了。所以：
+
+- 第一次启动会提示「导入」：把游戏目录递归复制到 `Android/data/.../files/games/<名字>-<短哈希>/`
+- 有进度、可取消；取消或失败会删掉半成品
+- 导入一次后直接进游戏；原目录不动，但**占双份空间**（游戏几百 MB 到几 GB）
+
+### 代价
+
+- APK **10.3 MB → 13.9 MB**
+- 仍然只编 arm64
+
+### 验证
+
+- 原生编译通过；`libmain.so` 导出 `SDL_main`，`libSDL2.so` 导出 50 个 `Java_org_libsdl_app_*` 符号
+- 为了编过 SDL2 修了一处：它给 C 代码加 `-Werror=declaration-after-statement`，在 NDK r26 上必失败，
+  改成 `-Wno-declaration-after-statement`
+- ⚠️ 真机仍未验：Surface、触屏、音频、导入后的启动
+
+---
+
 ## v3.1 — 2026-11-06
 
 ### ONS（NScripter）移植版可以真跑了

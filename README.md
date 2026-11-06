@@ -254,7 +254,7 @@
 | **TyranoBuilder**（HTML5） | `index.html` + `tyrano/` 或 `data/` | ✅ 可以直接启动 |
 
 | **ONS / NScripter** | `*.nsa` / `*.ns2` / `*.sar` / `nscript.dat` / `0.txt` | ✅ 可以直接启动（仅 arm64） |
-| **KiriKiri / TVP** | 任意 `*.xp3` | ⛔ 同上，需要 krkrsdl2 |
+| **KiriKiri / TVP** | 任意 `*.xp3` | ✅ 可启动（**首次要导入**，见下） |
 
 Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（127.0.0.1），WebView 打开
 `http://127.0.0.1:<端口>/index.html`。
@@ -273,8 +273,14 @@ Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（
 - 引擎跑在 `GLSurfaceView` 里，自带触屏映射；左上角 `×` 退出，返回键会先确认
 - 只编了 **arm64**：32 位设备会提示不支持
 
-> KRKR 仍然不行：它的开源实现（krkrsdl2）以桌面为主，开源安卓壳（Tyranor / KiriKiri）都是
-> 完整 App 不是可嵌入的库，要接进来得自己补 TVP 的 Android 层。
+**KRKR 怎么跑的**：内置 [krkrsdl2](https://github.com/uyjulian/krkrsdl2)（吉里吉里Z 的 SDL2 移植，MIT；
+内核 krkrz 是 BSD 系），CMake + NDK 编成 `libmain.so`（7.7 MB）+ `libSDL2.so`（1.5 MB）：
+
+- 引擎只认**真实文件路径**（要 open/seek/写存档），SAF 的 `content://` 接不了
+- 所以第一次启动会提示「导入」：把游戏目录**复制一份**到应用目录（`Android/data/.../files/games/`），
+  有进度、可取消；导入一次之后直接进游戏，原目录不动
+- 复制量等于游戏大小（几百 MB 到几 GB），会占双份空间——这是 KRKR 的硬约束，没办法绕
+- 存档写在导入目录里（`savedata/`），删掉导入目录等于删档
 
 ### 下载（磁力 / BT）
 
@@ -334,6 +340,9 @@ Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（
 | `Store.java` | 81 | SharedPreferences：播放位置、阅读进度、字号/背景/阅读方式、已添加目录 |
 | `ZoomView.java` | 192 | 单张图画布：双击/双指缩放、放大后拖动 |
 | `Zip.java` | 717 | zip 读取：中央目录 / ZIP64 / deflate / ZipCrypto / WinZip AES，可跨分卷（纯 Java） |
+| `KrkrActivity.java` | 30 | KiriKiri 运行器：继承 SDLActivity，把导入目录传给 native |
+| `GameImport.java` | 130 | SAF → 应用目录的递归复制（带进度/取消），KRKR 用 |
+| `org/libsdl/app/*` | 4300 | SDL2 官方 Android 胶水层（原样引入） |
 | `OnsActivity.java` | 250 | ONS 运行器：托管 ONScripterView、GL 全屏、错误与退出 |
 | `com/onscripter/*` | 2400 | ONScripter 引擎的 Java 层（原样引入，GPL-2.0-or-later） |
 | `TyranoActivity.java` | 250 | Tyrano 运行器：WebView + 全屏 + 退出确认 + 端口选择 |
@@ -420,6 +429,9 @@ libs/jni/armeabi-v7a/libjlibtorrent-1.2.0.18.so   # 6.2 MB
 
 `libs/ons/` 是 ONS 引擎（ONScripter + SDL2）的编译产物，构建步骤与补丁见 `libs/ons/BUILD.md`：
 `libonscripter.so`（9.8 MB）+ `libsdl.so`（2.8 MB），只有 arm64。
+
+`libs/krkr/` 是 KiriKiri（krkrsdl2，内核 krkrz）的编译产物：`libmain.so`（7.7 MB）+ `libSDL2.so`（1.5 MB），
+构建方式见 `libs/krkr/BUILD.md`，同样只有 arm64。
 
 构建脚本会把 jar 一起丢给 `d8`，并把所有 `.so` 塞进 APK 的 `lib/<abi>/`。
 原生库必须保留带版本号的文件名——jlibtorrent 先按 `libjlibtorrent-<ver>` 找，找不到才退回 `libjlibtorrent`。
@@ -535,7 +547,8 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - 解压需要目录的**写入**权限：v2.2 之前添加的文件夹只有读权限，需要移除后重新添加一次
 - 看图不支持旋转与「保存为」，GIF 在 Android 8 及以下只能看第一帧
 - 阅读器没有书签与标注
-- Galgame：Tyrano 与 ONS 可运行（ONS 仅 arm64）；KiriKiri 需要原生引擎，仍只做识别与提示
+- Galgame：Tyrano、ONS、KRKR 都可运行（后两者仅 arm64）
+- KRKR 首次启动要复制整个游戏目录，占双份空间；复制中途退出会清掉半成品
 - ONS 存档写在游戏目录里，换一个文件夹存档就没了；游戏目录只读时存档会失败
 - Tyrano 只认根目录的 `index.html`；入口在子目录里的自制导出需要手动改结构
 - 下载只支持 magnet 与本地 `.torrent`；不支持 http(s) 种子直链
@@ -557,5 +570,6 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 
 - **GPLv3**：[jlibtorrent](https://github.com/frostwire/jlibtorrent)（libtorrent 的 Java 绑定）
 - **GPL-2.0-or-later**：[ONScripter](https://github.com/matthewn4444/onscripter-engine-android)（ONS 引擎）
+- **MIT + BSD 系**：[krkrsdl2](https://github.com/uyjulian/krkrsdl2) 与 [krkrz](https://github.com/krkrz/krkrz)（KRKR 引擎）
 
 两者兼容，**分发 APK 时整体按 GPLv3 走**。源码本来就公开，满足它们的要求。

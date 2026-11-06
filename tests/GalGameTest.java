@@ -67,7 +67,7 @@ public class GalGameTest {
         GalGame.Info k = GalGame.detect(ls("data.xp3|0", "patch.xp3|0", "startup.tjs|0"));
         eq("krkr 引擎", k.engine, GalGame.KRKR);
         eq("krkr 标签", k.label, "KiriKiri");
-        ok("krkr 暂不支持", !k.supported());
+        ok("krkr 可运行", k.supported());
 
         // KRKR 里带 index.html（说明页）也还是 KRKR
         eq("xp3 优先于裸 html",

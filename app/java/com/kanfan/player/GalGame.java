@@ -29,7 +29,7 @@ public final class GalGame {
         public int hits;
 
         public boolean supported() {
-            return engine == TYRANO || engine == ONS;
+            return engine == TYRANO || engine == ONS || engine == KRKR;
         }
 
         public String why() {
@@ -39,7 +39,7 @@ public final class GalGame {
                 case ONS:
                     return "ONS（NScripter），内置引擎可直接运行（需要 64 位设备）";
                 case KRKR:
-                    return "KiriKiri（KRKR/TVP）——需要内置 KiriKiri 引擎，当前版本还跑不了";
+                    return "KiriKiri（KRKR / TVP），首次启动要先导入（复制一份到应用目录）";
                 default:
                     return "没认出这是哪种移植版";
             }

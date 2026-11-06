@@ -134,11 +134,13 @@ with zipfile.ZipFile(os.path.join(out, "unsigned.apk"), "a", zipfile.ZIP_DEFLATE
                 count += 1
     if count == 0:
         print("   （没有原生库，只打 Java 部分）")
-    # ONS 引擎：libs/ons/<abi>/*.so -> lib/<abi>/
-    ons = os.path.join(root, "libs", "ons")
-    if os.path.isdir(ons):
-        for abi in sorted(os.listdir(ons)):
-            d = os.path.join(ons, abi)
+    # 引擎库：libs/{ons,krkr}/<abi>/*.so -> lib/<abi>/
+    for eng in ("ons", "krkr"):
+        base = os.path.join(root, "libs", eng)
+        if not os.path.isdir(base):
+            continue
+        for abi in sorted(os.listdir(base)):
+            d = os.path.join(base, abi)
             if not os.path.isdir(d):
                 continue
             for f in sorted(os.listdir(d)):

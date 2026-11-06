@@ -2,6 +2,7 @@ package com.kanfan.player;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
@@ -11,6 +12,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -33,6 +35,7 @@ import android.widget.Toast;
 
 import android.media.MediaMetadataRetriever;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -1415,20 +1418,144 @@ public class MainActivity extends Activity {
             startActivity(it);
             return;
         }
-        String msg;
         if (r.engine == GalGame.KRKR) {
-            msg = "这是 KiriKiri（KRKR / TVP）移植版。\n\n"
-                    + "要直接运行，需要把 KiriKiri 引擎（krkrsdl2 + SDL2）作为原生库编进应用，"
-                    + "这是个大工程，当前版本还没做。\n\n"
-                    + "现在可以用第三方的 Kirikiroid2 打开同一个文件夹。";
-        } else {
-            msg = "这个目录没认出可运行的引擎。";
+            launchKrkr(r);
+            return;
         }
         new AlertDialog.Builder(this)
-                .setTitle("暂不支持这个引擎")
-                .setMessage(msg)
+                .setTitle("没认出引擎")
+                .setMessage("这个目录没认出可运行的引擎。")
                 .setPositiveButton("知道了", null)
                 .show();
+    }
+
+    private static boolean arm64() {
+        if (Build.VERSION.SDK_INT < 21) return false;
+        for (String abi : Build.SUPPORTED_64_BIT_ABIS) {
+            if ("arm64-v8a".equals(abi)) return true;
+        }
+        return false;
+    }
+
+    /** KRKR 只认真实路径：先导入一份，之后直接进引擎 */
+    private void launchKrkr(final Row r) {
+        if (!arm64()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("暂不支持这台设备")
+                    .setMessage("KiriKiri 引擎只编了 arm64 版本，这台是 32 位设备。")
+                    .setPositiveButton("知道了", null)
+                    .show();
+            return;
+        }
+        final Uri tree = Uri.parse(r.tree);
+        final File dir = GameImport.target(this, tree, r.rel, gameName(r));
+        if (GameImport.ready(dir)) {
+            startKrkr(dir);
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("要先导入这个游戏")
+                .setMessage("KiriKiri 引擎只认真实文件路径，需要把游戏复制一份到应用目录（原目录不动）。\n\n"
+                        + "复制量取决于游戏大小，几百 MB 到几 GB。导入一次之后就不用再复制。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("开始导入", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        importKrkr(r, tree, dir);
+                    }
+                })
+                .show();
+    }
+
+    private void startKrkr(File dir) {
+        Intent it = new Intent(this, KrkrActivity.class);
+        it.putExtra("path", dir.getAbsolutePath());
+        startActivity(it);
+    }
+
+    private void importKrkr(final Row r, final Uri tree, final File dir) {
+        final TextView info = new TextView(this);
+        info.setText("正在准备…");
+        info.setTextColor(getColor(R.color.text));
+        info.setTextSize(13f);
+        info.setSingleLine(true);
+        info.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+
+        final ProgressBar bar = new ProgressBar(this, null,
+                android.R.attr.progressBarStyleHorizontal);
+        bar.setIndeterminate(true);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int p = Ui.dp(this, 20);
+        box.setPadding(p, Ui.dp(this, 8), p, 0);
+        box.addView(info);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, 6));
+        blp.topMargin = Ui.dp(this, 12);
+        box.addView(bar, blp);
+
+        final boolean[] cancel = new boolean[]{false};
+        final AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("正在导入游戏")
+                .setView(box)
+                .setCancelable(false)
+                .setNegativeButton("取消", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        cancel[0] = true;
+                    }
+                })
+                .create();
+        dlg.show();
+
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String err = null;
+                try {
+                    GameImport.copy(MainActivity.this, tree, r.rel, dir,
+                            new GameImport.Progress() {
+                                private long last;
+
+                                @Override
+                                public void onProgress(final String name, final int files,
+                                                       final long bytes) {
+                                    long now = System.currentTimeMillis();
+                                    if (now - last < 150) return;
+                                    last = now;
+                                    ui.post(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            info.setText("已复制 " + files + " 个文件 · "
+                                                    + Ui.fmtSize(bytes) + " · " + name);
+                                        }
+                                    });
+                                }
+
+                                @Override
+                                public boolean cancelled() {
+                                    return cancel[0];
+                                }
+                            });
+                } catch (Throwable t) {
+                    err = t.getMessage() == null ? "导入失败" : t.getMessage();
+                    GameImport.delete(dir);
+                }
+                final String fe = err;
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        dlg.dismiss();
+                        if (fe != null) {
+                            Toast.makeText(MainActivity.this, fe, Toast.LENGTH_LONG).show();
+                        } else {
+                            startKrkr(dir);
+                        }
+                    }
+                });
+            }
+        }).start();
     }
 
     private String gameName(Row r) {
