@@ -87,4 +87,19 @@ public class Store {
     public static void setImgMode(Context c, int mode) {
         sp(c).edit().putInt("i_mode", mode).apply();
     }
+
+    /** PDF 读到第几页（从 1 开始；0 表示没记录） */
+    public static void savePdfPage(Context c, String key, int page) {
+        if (key == null || key.length() == 0) return;
+        if (page <= 1) {
+            sp(c).edit().remove("d_" + key).apply();
+            return;
+        }
+        sp(c).edit().putInt("d_" + key, page).apply();
+    }
+
+    public static int getPdfPage(Context c, String key) {
+        if (key == null) return 0;
+        return sp(c).getInt("d_" + key, 0);
+    }
 }

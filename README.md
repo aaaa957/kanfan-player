@@ -29,7 +29,7 @@
 | **压缩** | 管理页勾选文件 → 压缩成 ZIP：流式写入、Zip64、已是压缩格式的自动改存储；有进度、可取消，失败不留半截文件 |
 | **重命名** | 长按任意文件 → 重命名，可改扩展名（`x.mp4` → `x.zip` 直接当压缩包打开）；也可「用其他应用打开」交给系统处理 |
 | **管理 / 隐藏** | 管理页多选：首屏移除/拖动排序文件夹，目录内隐藏文件；首屏底部可一键恢复；长按可彻底删除 |
-| **阅读** | 点文件夹里的 `.txt` / `.epub` 直接进阅读器；**分页 / 滚动两种模式自选**（分页左滑右滑翻页，滚动连续加载）；章节识别、目录跳转、字号与三种背景、进度记忆；EPUB 的插图随文显示 |
+| **阅读** | 点文件夹里的 `.txt` / `.epub` 直接进阅读器；**分页 / 滚动两种模式自选**（分页左滑右滑翻页，滚动连续加载）；章节识别、目录跳转、字号与三种背景、进度记忆；EPUB 的插图随文显示；**`.pdf` 用系统 PdfRenderer 连续滚动阅读，可缩放、跳页、记忆页码** |
 | **画面** | 沉浸式全屏（隐藏状态栏 + 导航栏）、横屏、按原始比例居中不拉伸、播放时屏幕常亮 |
 | **其它** | 锁定防误触；控制条 3.5 秒自动隐藏 |
 
@@ -117,6 +117,20 @@
 > 跑解析器 —— 书名、21–27 章、每本 13–16 万字全部读出，插图 **165/165 全部命中**，
 > 单本打开耗时 6–151 ms。这些书用的是 `../Images/xx.webp` 相对路径 + 自定义属性
 > `zy-enlarge-src="self"`，正好验证了路径归一和属性忽略。
+
+### PDF
+
+点文件夹里的 `.pdf` 直接进阅读器——用系统自带的 `PdfRenderer` 渲染，不引第三方库：
+
+- **连续纵向滚动**，页面按屏宽等比铺满，一页接一页
+- 双指缩放（1×–5×）、双击 2.5×、放大后拖动、松手惯性滑动
+- 点画面显隐顶栏；顶栏有页码与「跳页」（输入页号直接跳）
+- 记住上次读到第几页，下次打开接着看
+- 渲染在后台线程串行做（`PdfRenderer` 不是线程安全的），位图进 LruCache，滑过去的页自动回收
+- 有些提供方给的是管道而不是真文件，`PdfRenderer` 读不了——会自动复制一份到缓存再打开
+
+> 只做「看」：PDF 里的文字不可选、不可搜、不能复制。要这些能力得引入 PDFium/MuPDF 这类库，
+> 与「零第三方依赖」冲突。加密的 PDF 也打不开（会提示）。
 
 ### 看图
 
@@ -248,13 +262,13 @@
 | 文件 | 行数 | 职责 |
 |---|---:|---|
 | `PlayerActivity.java` | 1289 | 播放器本体：MediaPlayer + SurfaceView、手势分发、连播、进度记忆、控制条、外挂字幕/弹幕接线 |
-| `MainActivity.java` | 2063 | 片库：目录授权、分层浏览、缩略图、管理页（隐藏/拖动排序/压缩）、长按重命名 |
+| `MainActivity.java` | 2103 | 片库：目录授权、分层浏览、缩略图、管理页（隐藏/拖动排序/压缩）、长按重命名 |
 | `ArchiveActivity.java` | 1142 | 压缩包：条目列表、密码弹窗、目标选择、进度与取消、分卷归一 |
 | `ImageActivity.java` | 458 | 看图：同目录列表、两种模式切换、预解码、GIF 动图 |
 | `PagerLayout.java` | 343 | 左右翻页容器：跟手拖动、松手吸附、边缘阻尼、三槽位复用 |
 | `ImageColumn.java` | 241 | 上下滑动看图：整列铺开 + 视口窗口化解码 |
 | `ReaderActivity.java` | 1075 | 阅读器：分页（StaticLayout 测量）/ 连续滚动两种模式、字号/背景/进度、EPUB 插图 |
-| `Scan.java` | 429 | SAF 目录遍历：分层列表、同目录文件枚举、文本读取（UTF-8/GBK） |
+| `Scan.java` | 430 | SAF 目录遍历：分层列表、同目录文件枚举、文本读取（UTF-8/GBK） |
 | `Epub.java` | 310 | EPUB 解析：container → OPF → spine / 目录 / 插图，纯 Java |
 | `Sub.java` | 206 | 字幕解析：SRT / VTT / ASS，纯 Java |
 | `DanmakuView.java` | 194 | 弹幕渲染：按帧重绘、轨道分配、描边文字 |
@@ -265,6 +279,9 @@
 | `Store.java` | 81 | SharedPreferences：播放位置、阅读进度、字号/背景/阅读方式、已添加目录 |
 | `ZoomView.java` | 192 | 单张图画布：双击/双指缩放、放大后拖动 |
 | `Zip.java` | 717 | zip 读取：中央目录 / ZIP64 / deflate / ZipCrypto / WinZip AES，可跨分卷（纯 Java） |
+| `PdfActivity.java` | 449 | PDF 阅读：PdfRenderer 生命周期、后台渲染、跳页、页码记忆、非 seekable 落盘兜底 |
+| `PdfView.java` | 369 | PDF 画布：连续滚动、双指/双击缩放、惯性、按需渲染 + LruCache |
+| `PdfLayout.java` | 108 | PDF 排版算术：页偏移、可视范围、缩放后平移夹取（纯 Java） |
 | `ZipWrite.java` | 371 | zip 写入：流式、Zip64、UTF-8 名、进度与取消（纯 Java） |
 | `Vols.java` | 228 | 分卷命名识别：`partN.rar` / `.rNN` / `.zNN` / `.001`，纯 Java |
 | `Nat.java` | 47 | 原生解压的 Java 绑定（rar / 7z，支持多卷拼接） |
@@ -357,9 +374,10 @@ java -cp out/tests ZipTest D:/tmp/ziptest   # 真实 zip：普通/存储/ZipCryp
 java -cp out/tests VolsTest     # 分卷命名：partN / rNN / zNN / 001，排序与缺卷
 java -cp out/tests ZipVolTest   # 分卷 zip：现场切卷，跨卷读、缺卷报错
 java -cp out/tests ZipWriteTest # 压缩：存储/deflate/Zip64/UTF-8 名/取消，产物交给 7z t
+java -cp out/tests PdfLayoutTest # PDF 排版：页偏移、可视范围、缩放焦点、平移夹取
 ```
 
-**312 项用例**，目前全部通过：
+**353 项用例**，目前全部通过：
 
 | 用例 | 数量 | 重点覆盖 |
 |---|---:|---|
@@ -374,6 +392,7 @@ java -cp out/tests ZipWriteTest # 压缩：存储/deflate/Zip64/UTF-8 名/取消
 | `VolsTest` | 33 | 新式/旧式 rar、`.z01` 分卷、7-Zip 切卷的归组与排序；`part10` 按数值排；缺卷提示 |
 | `ZipVolTest` | 8 | 把完整 zip 切成 2/3 卷（切点故意不对齐）后跨卷读；少一卷必须报错 |
 | `ZipWriteTest` | 26 | 写出来的包交给 `7z t` 校验；deflate/store、Zip64、未知大小、两万条目、取消 |
+| `PdfLayoutTest` | 41 | 页偏移与总高、可视范围二分、缩放焦点保持、平移夹取、空/坏页不崩 |
 
 > UI 与播放链路仍没有自动化测试 —— 这台开发机上没有安卓设备也没有模拟器，只能装机手测。
 > 分页测量依赖 `StaticLayout`，属 Android 运行时，未纳入 JVM 用例。
@@ -435,6 +454,7 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - 解压需要目录的**写入**权限：v2.2 之前添加的文件夹只有读权限，需要移除后重新添加一次
 - 看图不支持旋转与「保存为」，GIF 在 Android 8 及以下只能看第一帧
 - 阅读器没有书签与标注
+- PDF 只能看：文字不可选/不可搜/不能复制；加密 PDF 打不开；超大页面按 1800px 渲染，放到 3× 以上会略糊
 - 倍速在退出播放器后回到 1.0×，不做跨会话记忆
 - 没有接入 MediaSession，锁屏与通知栏无控制，也没有画中画
 - 只在个人的几台设备上手动验证过，UI 与播放链路没有自动化测试（解析逻辑有）

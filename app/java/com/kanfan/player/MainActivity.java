@@ -1315,6 +1315,13 @@ public class MainActivity extends Activity {
     }
 
     private void read(Entry v) {
+        if (v.name.toLowerCase(Locale.US).endsWith(".pdf")) {
+            Intent it = new Intent(this, PdfActivity.class);
+            it.putExtra("uri", v.uri.toString());
+            it.putExtra("name", v.name);
+            startActivity(it);
+            return;
+        }
         Intent it = new Intent(this, ReaderActivity.class);
         it.putExtra("uri", v.uri.toString());
         it.putExtra("name", v.name);
@@ -1778,9 +1785,16 @@ public class MainActivity extends Activity {
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
         col.addView(name);
 
-        String ext = v.name.toLowerCase(Locale.US).endsWith(".epub") ? "EPUB" : "TXT";
-        int[] pos = Store.getBookPos(this, v.key());
-        String read = pos == null ? "" : String.format(Locale.US, " · 上次读到第 %d 章", pos[0] + 1);
+        boolean isPdf = v.name.toLowerCase(Locale.US).endsWith(".pdf");
+        String ext = isPdf ? "PDF" : (v.name.toLowerCase(Locale.US).endsWith(".epub") ? "EPUB" : "TXT");
+        String read = "";
+        if (isPdf) {
+            int pg = Store.getPdfPage(this, v.key());
+            if (pg > 0) read = String.format(Locale.US, " · 上次读到第 %d 页", pg);
+        } else {
+            int[] pos = Store.getBookPos(this, v.key());
+            if (pos != null) read = String.format(Locale.US, " · 上次读到第 %d 章", pos[0] + 1);
+        }
         TextView meta = new TextView(this);
         meta.setText(ext + " · " + Ui.fmtSize(v.size) + read);
         meta.setTextColor(getColor(R.color.dim));

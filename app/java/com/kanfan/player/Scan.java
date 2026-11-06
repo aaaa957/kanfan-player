@@ -33,7 +33,7 @@ public class Scan {
             ".flv", ".m4v", ".wmv", ".rmvb", ".mpg", ".mpeg", ".3gp"
     };
 
-    private static final String[] BOOK_EXT = {".txt", ".epub"};
+    private static final String[] BOOK_EXT = {".txt", ".epub", ".pdf"};
 
     private static final String[] ARCHIVE_EXT = {".zip", ".7z", ".rar"};
 
