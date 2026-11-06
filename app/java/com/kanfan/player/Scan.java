@@ -8,6 +8,11 @@ import android.provider.DocumentsContract;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 
 /**
  * 只扫描用户手动添加的文件夹（SAF 目录授权），不碰系统相册索引。
@@ -216,5 +221,98 @@ public class Scan {
             }
         }
         return 0;
+    }
+
+    // ---------------- 外挂字幕 / 弹幕的辅助 ----------------
+
+    /** 列出某目录下的全部文件（不含子目录），返回 {文件名, uri}，用于找同名外挂文件 */
+    public static List<String[]> siblings(Context c, Uri tree, String relPath) {
+        List<String[]> out = new ArrayList<>();
+        try {
+            String docId = resolve(c, tree, relPath);
+            if (docId == null) return out;
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
+            Cursor cur = null;
+            try {
+                cur = c.getContentResolver().query(children, PROJ, null, null, null);
+                if (cur == null) return out;
+                while (cur.moveToNext()) {
+                    String id = cur.getString(0);
+                    String name = cur.getString(1);
+                    String mime = cur.getString(2);
+                    if (DIR_MIME.equals(mime) || name == null) continue;
+                    out.add(new String[]{name, DocumentsContract.buildDocumentUriUsingTree(tree, id).toString()});
+                }
+            } finally {
+                if (cur != null) cur.close();
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    /** 读取文本文件；先按 UTF-8 严格解码，失败再退回 GBK（中文字幕常见编码） */
+    public static String readText(Context c, Uri uri, int maxBytes) {
+        java.io.InputStream in = null;
+        try {
+            in = c.getContentResolver().openInputStream(uri);
+            if (in == null) return "";
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n, total = 0;
+            while ((n = in.read(buf)) > 0) {
+                total += n;
+                if (total > maxBytes) break;
+                bos.write(buf, 0, n);
+            }
+            return bytesToText(bos.toByteArray());
+        } catch (Exception e) {
+            return "";
+        } finally {
+            if (in != null) {
+                try {
+                    in.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    private static String bytesToText(byte[] data) {
+        if (data == null || data.length == 0) return "";
+        if (data.length >= 3 && (data[0] & 0xFF) == 0xEF
+                && (data[1] & 0xFF) == 0xBB && (data[2] & 0xFF) == 0xBF) {
+            return new String(data, 3, data.length - 3, StandardCharsets.UTF_8);
+        }
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(data)).toString();
+        } catch (CharacterCodingException e) {
+            try {
+                return new String(data, Charset.forName("GBK"));
+            } catch (Exception e2) {
+                return new String(data, StandardCharsets.UTF_8);
+            }
+        }
+    }
+
+    /** 取文件的显示名（含扩展名） */
+    public static String displayName(Context c, Uri uri) {
+        Cursor cur = null;
+        try {
+            cur = c.getContentResolver().query(uri,
+                    new String[]{DocumentsContract.Document.COLUMN_DISPLAY_NAME}, null, null, null);
+            if (cur != null && cur.moveToFirst()) {
+                String n = cur.getString(0);
+                if (n != null && !n.isEmpty()) return n;
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (cur != null) cur.close();
+        }
+        String seg = uri.getLastPathSegment();
+        return seg == null ? "" : seg;
     }
 }

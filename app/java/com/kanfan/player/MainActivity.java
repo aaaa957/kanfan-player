@@ -578,6 +578,7 @@ public class MainActivity extends Activity {
         Intent it = new Intent(this, PlayerActivity.class);
         it.putExtra("uri", v.uri.toString());
         it.putExtra("title", v.title);
+        it.putExtra("name", v.name);
         it.putExtra("bucket", v.bucket);
         it.putExtra("tree", v.tree);
         it.putExtra("rel", v.relPath);

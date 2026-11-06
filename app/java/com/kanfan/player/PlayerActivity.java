@@ -1,6 +1,7 @@
 package com.kanfan.player;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
@@ -38,15 +39,26 @@ import java.util.Locale;
 
 public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
         MediaPlayer.OnPreparedListener, MediaPlayer.OnCompletionListener,
-        MediaPlayer.OnErrorListener {
+        MediaPlayer.OnErrorListener, DanmakuView.Clock {
 
     private FrameLayout root;
     private SurfaceView surface;
     private View controls;
     private LinearLayout topBar, bottomBar;
     private TextView titleView, timeCur, timeTotal, speedChip, seekPreview, bigHint;
+    private TextView subtitleView, subChip, dmChip;
+    private DanmakuView danmakuView;
     private ImageView playBtn, lockBtn;
     private SeekBar seekBar;
+
+    // 外挂字幕 / 弹幕
+    private static final int REQ_SUB = 3001, REQ_DM = 3002;
+    private String fileName = "";
+    private final List<Sub.Cue> cues = new ArrayList<>();
+    private final List<String[]> sidecars = new ArrayList<>(); // {文件名, uri}
+    private boolean subOn, dmOn;
+    private String subName = "", dmName = "";
+    private int lastCue = -2;
 
     private MediaPlayer mp;
     private boolean prepared = false;
@@ -95,15 +107,18 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
         bucket = getIntent().getStringExtra("bucket");
         treeUri = getIntent().getStringExtra("tree");
         relPath = getIntent().getStringExtra("rel");
+        fileName = getIntent().getStringExtra("name");
         if (title == null) title = "";
         if (bucket == null) bucket = "";
         if (treeUri == null) treeUri = "";
         if (relPath == null) relPath = "";
+        if (fileName == null) fileName = "";
 
         buildUi();
         loadPlaylist();
         immerse();
         startPlay();
+        loadSidecars();
     }
 
     private void immerse() {
@@ -129,9 +144,34 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
         slp.gravity = Gravity.CENTER;
         root.addView(surface, slp);
 
+        // 弹幕层：不接收触摸，手势仍然落到 root 上
+        danmakuView = new DanmakuView(this);
+        danmakuView.setClock(this);
+        danmakuView.setVisibility(View.GONE);
+        root.addView(danmakuView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 字幕层：底部居中，带描边阴影保证任何画面上都能看清
+        subtitleView = new TextView(this);
+        subtitleView.setTextColor(Color.WHITE);
+        subtitleView.setTextSize(17f);
+        subtitleView.setGravity(Gravity.CENTER);
+        subtitleView.setMaxLines(3);
+        subtitleView.setLineSpacing(Ui.dp(this, 3), 1f);
+        subtitleView.setShadowLayer(Math.max(2f, Ui.dp(this, 3)), 0, Ui.dp(this, 1), 0xE6000000);
+        subtitleView.setPadding(Ui.dp(this, 28), 0, Ui.dp(this, 28), 0);
+        subtitleView.setVisibility(View.GONE);
+        FrameLayout.LayoutParams subLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM);
+        subLp.bottomMargin = Ui.dp(this, 118);
+
         controls = buildControls();
         root.addView(controls, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 字幕放在控制条之上，避免被底部渐变压暗
+        root.addView(subtitleView, subLp);
 
         seekPreview = new TextView(this);
         seekPreview.setTextColor(Color.WHITE);
@@ -285,6 +325,30 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
             }
         });
         chipRow.addView(speedChip);
+
+        subChip = sideChip("字幕");
+        subChip.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showSubMenu();
+            }
+        });
+        LinearLayout.LayoutParams sclp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        sclp.setMargins(Ui.dp(this, 8), 0, 0, 0);
+        chipRow.addView(subChip, sclp);
+
+        dmChip = sideChip("弹幕");
+        dmChip.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showDmMenu();
+            }
+        });
+        LinearLayout.LayoutParams dclp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        dclp.setMargins(Ui.dp(this, 8), 0, 0, 0);
+        chipRow.addView(dmChip, dclp);
 
         TextView tip = new TextView(this);
         tip.setText("双击播放/暂停 · 长按 2× 倍速");
@@ -449,6 +513,8 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
             showHint("继续上次进度\n" + Ui.fmtDur(saved));
         }
         ui.post(ticker);
+        ui.post(subTicker);
+        syncDanmaku();
         scheduleHide();
     }
 
@@ -492,6 +558,8 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
         if (!prepared || mp == null) return;
         mp.seekTo((int) clamp(ms));
         updateSeekUi();
+        if (danmakuView != null) danmakuView.invalidate();
+        updateSubtitle(clamp(ms));
     }
 
     private void togglePlay() {
@@ -509,6 +577,7 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
             updatePlayIcon(false);
             scheduleHide();
         }
+        syncDanmaku();
     }
 
     private void updatePlayIcon(boolean paused) {
@@ -578,15 +647,30 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
     }
 
     private void intentTo(VideoItem v) {
+        if (danmakuView != null) danmakuView.setRunning(false);
         release();
         uri = v.uri;
         title = v.title;
+        fileName = v.name;
         index = playlist.indexOf(v);
         titleView.setText(title);
         timeTotal.setText("--:--");
         timeCur.setText("00:00");
         seekBar.setProgress(0);
+        cues.clear();
+        subName = "";
+        subOn = false;
+        setChipActive(subChip, false);
+        if (danmakuView != null) {
+            danmakuView.setData(null);
+            danmakuView.setVisibility(View.GONE);
+        }
+        dmName = "";
+        dmOn = false;
+        setChipActive(dmChip, false);
+        sidecars.clear();
         startPlay();
+        loadSidecars();   // 换集后重新找这一集的外挂字幕/弹幕
     }
 
     @Override
@@ -650,12 +734,25 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
         controlsVisible = true;
         controls.setVisibility(View.VISIBLE);
         controls.animate().alpha(1f).setDuration(160).start();
+        layoutSubtitle(true);
         scheduleHide();
+    }
+
+    /** 控制条出现时把字幕往上顶，隐藏时回到底部 */
+    private void layoutSubtitle(boolean controlsUp) {
+        if (subtitleView == null || subtitleView.getLayoutParams() == null) return;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) subtitleView.getLayoutParams();
+        int m = Ui.dp(this, controlsUp ? 118 : 48);
+        if (lp.bottomMargin != m) {
+            lp.bottomMargin = m;
+            subtitleView.setLayoutParams(lp);
+        }
     }
 
     private void hideControls() {
         if (locked) return;
         controlsVisible = false;
+        layoutSubtitle(false);
         controls.animate().alpha(0f).setDuration(200).withEndAction(new Runnable() {
             @Override
             public void run() {
@@ -907,6 +1004,7 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
     protected void onDestroy() {
         super.onDestroy();
         ui.removeCallbacksAndMessages(null);
+        if (danmakuView != null) danmakuView.setRunning(false);
         release();
     }
 
@@ -920,5 +1018,272 @@ public class PlayerActivity extends Activity implements SurfaceHolder.Callback,
         }
         mp = null;
         prepared = false;
+    }
+
+    // ---------------- 外挂字幕 / 弹幕 ----------------
+
+    private TextView sideChip(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(12f);
+        t.setPadding(Ui.dp(this, 12), Ui.dp(this, 6), Ui.dp(this, 12), Ui.dp(this, 6));
+        setChipActive(t, false);
+        return t;
+    }
+
+    private void setChipActive(TextView t, boolean on) {
+        if (t == null) return;
+        if (on) {
+            t.setTextColor(getColor(R.color.bg));
+            t.setBackground(Ui.round(this, getColor(R.color.accent), 20f));
+        } else {
+            t.setTextColor(0xCCFFFFFF);
+            t.setBackground(Ui.roundStroke(this, 0x22FFFFFF, 20f, 0x55FFFFFF, 1f));
+        }
+    }
+
+    private final Runnable subTicker = new Runnable() {
+        @Override
+        public void run() {
+            if (prepared && mp != null) updateSubtitle(mp.getCurrentPosition());
+            ui.postDelayed(this, 120);
+        }
+    };
+
+    private void updateSubtitle(long ms) {
+        if (subtitleView == null) return;
+        if (!subOn || cues.isEmpty()) {
+            subtitleView.setText("");
+            subtitleView.setVisibility(View.GONE);
+            lastCue = -2;
+            return;
+        }
+        int idx = Sub.indexAt(cues, ms);
+        if (idx == lastCue) return;
+        lastCue = idx;
+        if (idx < 0) {
+            subtitleView.setText("");
+            subtitleView.setVisibility(View.GONE);
+        } else {
+            subtitleView.setText(cues.get(idx).text);
+            subtitleView.setVisibility(View.VISIBLE);
+        }
+    }
+
+    @Override
+    public long position() {
+        try {
+            return mp == null ? 0 : mp.getCurrentPosition();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    @Override
+    public boolean playing() {
+        try {
+            return mp != null && mp.isPlaying();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void syncDanmaku() {
+        if (danmakuView == null) return;
+        danmakuView.setDanmakuEnabled(dmOn);
+        danmakuView.setVisibility(dmOn ? View.VISIBLE : View.GONE);
+        danmakuView.setRunning(dmOn && playing());
+    }
+
+    private String baseName(String n) {
+        if (n == null || n.isEmpty()) return title;
+        int dot = n.lastIndexOf('.');
+        return dot > 0 ? n.substring(0, dot) : n;
+    }
+
+    /** 文件名是否以视频名为前缀（避免 xxx01 匹配到 xxx010） */
+    private boolean sameBase(String name, String base) {
+        if (name == null || base == null || base.isEmpty()) return false;
+        String a = name.toLowerCase(Locale.US), b = base.toLowerCase(Locale.US);
+        if (!a.startsWith(b)) return false;
+        if (a.length() == b.length()) return true;
+        char c = a.charAt(b.length());
+        return c == '.' || c == '_' || c == '-' || c == ' ' || c == '['
+                || c == '(' || c == '（' || c == '【';
+    }
+
+    /** 打开视频后，在同一个目录里找同名的字幕 / 弹幕 */
+    private void loadSidecars() {
+        if (treeUri == null || treeUri.isEmpty()) return;
+        final Uri tree = Uri.parse(treeUri);
+        final String rel = relPath;
+        final String base = baseName(fileName);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                final List<String[]> files = Scan.siblings(PlayerActivity.this, tree, rel);
+                String su = null, sn = "", du = null, dn = "";
+                for (String[] f : files) {
+                    if (!sameBase(f[0], base)) continue;
+                    String low = f[0].toLowerCase(Locale.US);
+                    if (su == null && Sub.isSubtitleName(low)) {
+                        su = f[1];
+                        sn = f[0];
+                    } else if (du == null && low.endsWith(".xml")) {
+                        du = f[1];
+                        dn = f[0];
+                    }
+                }
+                final String fsu = su, fsn = sn, fdu = du, fdn = dn;
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        sidecars.clear();
+                        sidecars.addAll(files);
+                        if (fsu != null) loadSubFrom(Uri.parse(fsu), fsn);
+                        if (fdu != null) loadDmFrom(Uri.parse(fdu), fdn);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void loadSubFrom(final Uri u, final String name) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String txt = Scan.readText(PlayerActivity.this, u, 8 * 1024 * 1024);
+                final List<Sub.Cue> list = Sub.parse(txt, name);
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        cues.clear();
+                        cues.addAll(list);
+                        subOn = !cues.isEmpty();
+                        subName = subOn ? name : "";
+                        lastCue = -2;
+                        setChipActive(subChip, subOn);
+                        updateSubtitle(position());
+                        Toast.makeText(PlayerActivity.this,
+                                subOn ? "字幕：" + name + "（" + cues.size() + " 条）"
+                                        : "没从这个文件里解析到字幕",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void loadDmFrom(final Uri u, final String name) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String txt = Scan.readText(PlayerActivity.this, u, 24 * 1024 * 1024);
+                final List<Danmaku.Item> list = Danmaku.parse(txt, name);
+                ui.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        danmakuView.setData(list);
+                        dmOn = !list.isEmpty();
+                        dmName = dmOn ? name : "";
+                        setChipActive(dmChip, dmOn);
+                        syncDanmaku();
+                        danmakuView.invalidate();
+                        Toast.makeText(PlayerActivity.this,
+                                dmOn ? "弹幕：" + name + "（" + list.size() + " 条）"
+                                        : "没从这个文件里解析到弹幕",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void showSubMenu() {
+        final List<String[]> cand = new ArrayList<>();
+        for (String[] f : sidecars) {
+            if (Sub.isSubtitleName(f[0])) cand.add(f);
+        }
+        final List<String> labels = new ArrayList<>();
+        labels.add(subOn ? "关闭字幕（当前：" + subName + "）" : "关闭字幕");
+        for (String[] f : cand) labels.add("加载：" + f[0]);
+        labels.add("从文件选择…");
+
+        new AlertDialog.Builder(this)
+                .setTitle("外挂字幕（SRT / ASS / VTT）")
+                .setItems(labels.toArray(new String[labels.size()]),
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d, int which) {
+                                if (which == 0) {
+                                    cues.clear();
+                                    subOn = false;
+                                    subName = "";
+                                    setChipActive(subChip, false);
+                                    updateSubtitle(position());
+                                } else if (which == labels.size() - 1) {
+                                    pickFile(REQ_SUB);
+                                } else {
+                                    String[] f = cand.get(which - 1);
+                                    loadSubFrom(Uri.parse(f[1]), f[0]);
+                                }
+                            }
+                        })
+                .show();
+    }
+
+    private void showDmMenu() {
+        final List<String[]> cand = new ArrayList<>();
+        for (String[] f : sidecars) {
+            String low = f[0].toLowerCase(Locale.US);
+            if (low.endsWith(".xml") || low.endsWith(".json")) cand.add(f);
+        }
+        final List<String> labels = new ArrayList<>();
+        labels.add(dmOn ? "关闭弹幕（当前：" + dmName + "）" : "关闭弹幕");
+        for (String[] f : cand) labels.add("加载：" + f[0]);
+        labels.add("从文件选择（.xml / .ass）…");
+
+        new AlertDialog.Builder(this)
+                .setTitle("外挂弹幕")
+                .setItems(labels.toArray(new String[labels.size()]),
+                        new android.content.DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(android.content.DialogInterface d, int which) {
+                                if (which == 0) {
+                                    dmOn = false;
+                                    dmName = "";
+                                    setChipActive(dmChip, false);
+                                    syncDanmaku();
+                                } else if (which == labels.size() - 1) {
+                                    pickFile(REQ_DM);
+                                } else {
+                                    String[] f = cand.get(which - 1);
+                                    loadDmFrom(Uri.parse(f[1]), f[0]);
+                                }
+                            }
+                        })
+                .show();
+    }
+
+    private void pickFile(int req) {
+        try {
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivityForResult(i, req);
+        } catch (Exception e) {
+            Toast.makeText(this, "系统没有可用的文件选择器", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri u = data.getData();
+        String nm = Scan.displayName(this, u);
+        if (requestCode == REQ_SUB) loadSubFrom(u, nm);
+        else if (requestCode == REQ_DM) loadDmFrom(u, nm);
     }
 }
