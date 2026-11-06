@@ -243,6 +243,61 @@ public class Scan {
         return null;
     }
 
+    /** 某个目录的直属子项：{名字, 是否目录}；用于识别游戏引擎的目录结构 */
+    public static List<String[]> children(Context c, Uri tree, String relPath) {
+        List<String[]> out = new ArrayList<>();
+        Cursor cur = null;
+        try {
+            String docId = resolve(c, tree, relPath);
+            if (docId == null) return out;
+            Uri kids = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
+            cur = c.getContentResolver().query(kids, PROJ, null, null, null);
+            if (cur == null) return out;
+            while (cur.moveToNext()) {
+                String name = cur.getString(1);
+                String mime = cur.getString(2);
+                if (name == null || name.isEmpty()) continue;
+                out.add(new String[]{name, DIR_MIME.equals(mime) ? "1" : "0"});
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (cur != null) cur.close();
+        }
+        return out;
+    }
+
+    /** 相对路径 → documentId（文件或目录都行），找不到返回 null */
+    public static String docIdOf(Context c, Uri tree, String relPath) {
+        String docId = DocumentId(tree);
+        if (docId == null) return null;
+        if (relPath == null || relPath.isEmpty()) return docId;
+        for (String seg : relPath.split("/")) {
+            if (seg.isEmpty()) continue;
+            String next = childAny(c, tree, docId, seg);
+            if (next == null) return null;
+            docId = next;
+        }
+        return docId;
+    }
+
+    /** 按名字找直属子项（文件或目录都算） */
+    public static String childAny(Context c, Uri tree, String docId, String name) {
+        Uri kids = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
+        Cursor cur = null;
+        try {
+            cur = c.getContentResolver().query(kids, PROJ, null, null, null);
+            if (cur == null) return null;
+            while (cur.moveToNext()) {
+                String n = cur.getString(1);
+                if (name.equals(n)) return cur.getString(0);
+            }
+        } catch (Exception ignored) {
+        } finally {
+            if (cur != null) cur.close();
+        }
+        return null;
+    }
+
     /** 只取某个目录（直属）里的视频，用于播放器的连播列表。relPath 为 "" 表示根目录 */
     public static List<Entry> childrenOf(Context c, Uri tree, String relPath) {        List<Entry> out = new ArrayList<>();
         try {

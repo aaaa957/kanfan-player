@@ -59,7 +59,7 @@ public class MainActivity extends Activity {
     private static final String KEY_ORDER = "trees_order";  // 新格式：按行存储，保留顺序
 
     private static final int T_HEADER = 0, T_VIDEO = 1, T_DIR = 2, T_BOOK = 3, T_IMAGE = 4,
-            T_ARCHIVE = 5, T_OTHER = 6, T_RESTORE = 7;
+            T_ARCHIVE = 5, T_OTHER = 6, T_RESTORE = 7, T_GAME = 8;
 
     private ListView list;
     private TextView subtitle, manageBtn, addBtn, titleView;
@@ -86,6 +86,9 @@ public class MainActivity extends Activity {
     private boolean manageMode;
     private final java.util.Set<String> hidden = new java.util.LinkedHashSet<>();
     private final java.util.Set<String> selected = new java.util.LinkedHashSet<>();
+    /** 目录 → 识别出的游戏引擎，避免每次 rebuildRows 都查一遍 SAF */
+    private final Map<String, GalGame.Info> gameCache =
+            new java.util.HashMap<String, GalGame.Info>();
     private int dragPos = -1;
 
     private final ExecutorService pool = Executors.newFixedThreadPool(4);
@@ -116,6 +119,7 @@ public class MainActivity extends Activity {
         String tree;
         String rel;
         int index;      // 根层级时的文件夹下标
+        int engine;     // T_GAME 用：识别出的引擎
         boolean checked;
         Entry item;
     }
@@ -530,6 +534,8 @@ public class MainActivity extends Activity {
                     openImage(r.item);
                 } else if (r.type == T_ARCHIVE && r.item != null) {
                     openArchive(r.item);
+                } else if (r.type == T_GAME) {
+                    launchGame(r);
                 } else if (r.type == T_OTHER && r.item != null) {
                     openOther(r.item);
                 }
@@ -939,6 +945,7 @@ public class MainActivity extends Activity {
     // ---------------- 扫描 ----------------
 
     private void rescan() {
+        gameCache.clear();
         refreshHeaderState();
         if (folders.isEmpty()) {
             all.clear();
@@ -1087,6 +1094,27 @@ public class MainActivity extends Activity {
 
     private void buildDirRows() {
         Crumb cur = stack.get(stack.size() - 1);
+
+        // 这一层如果是个 Galgame 移植版，顶上给一张启动卡
+        try {
+            String gkey = cur.tree + "|" + cur.rel;
+            GalGame.Info g = gameCache.get(gkey);
+            if (g == null) {
+                g = GalGame.detect(Scan.children(this, Uri.parse(cur.tree), cur.rel));
+                gameCache.put(gkey, g);
+            }
+            if (g.engine != GalGame.NONE) {
+                Row r = new Row();
+                r.type = T_GAME;
+                r.engine = g.engine;
+                r.tree = cur.tree;
+                r.rel = cur.rel;
+                r.label = g.supported() ? "启动游戏" : g.label + " 游戏（暂不支持）";
+                r.sub = g.why();
+                rows.add(r);
+            }
+        } catch (Throwable ignored) {
+        }
 
         List<Entry> scoped = new ArrayList<>();
         for (Entry v : all) {
@@ -1368,6 +1396,89 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             Toast.makeText(this, "没有能打开它的应用", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void launchGame(Row r) {
+        if (r.engine == GalGame.TYRANO) {
+            Intent it = new Intent(this, TyranoActivity.class);
+            it.putExtra("tree", r.tree);
+            it.putExtra("rel", r.rel);
+            it.putExtra("name", gameName(r));
+            startActivity(it);
+            return;
+        }
+        String msg;
+        if (r.engine == GalGame.KRKR) {
+            msg = "这是 KiriKiri（KRKR / TVP）移植版。\n\n"
+                    + "要直接运行，需要把 KiriKiri 引擎（krkrsdl2 + SDL2）作为原生库编进应用，"
+                    + "这是个大工程，当前版本还没做。\n\n"
+                    + "现在可以用第三方的 Kirikiroid2 打开同一个文件夹。";
+        } else {
+            msg = "这是 ONS（NScripter）移植版。\n\n"
+                    + "要直接运行，需要把 ONScripter 引擎编进应用，当前版本还没做。\n\n"
+                    + "现在可以用第三方的 ONS 模拟器打开同一个文件夹。";
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("暂不支持这个引擎")
+                .setMessage(msg)
+                .setPositiveButton("知道了", null)
+                .show();
+    }
+
+    private String gameName(Row r) {
+        if (r.rel == null || r.rel.isEmpty()) return "游戏";
+        int i = r.rel.lastIndexOf('/');
+        return i < 0 ? r.rel : r.rel.substring(i + 1);
+    }
+
+    /** 目录顶部的「启动游戏」卡片 */
+    private View gameView(Row r) {
+        boolean ok = r.engine == GalGame.TYRANO;
+        int pad = Ui.dp(this, 5);
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(0, 0, 0, pad);
+
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        card.setPadding(Ui.dp(this, 12), Ui.dp(this, 12), Ui.dp(this, 12), Ui.dp(this, 12));
+        card.setBackground(Ui.roundStroke(this, Ui.alpha(getColor(R.color.accent), ok ? 0.14f : 0.06f),
+                14f, Ui.alpha(getColor(R.color.accent), ok ? 0.45f : 0.18f), 1f));
+
+        FrameLayout iconBox = new FrameLayout(this);
+        iconBox.setBackground(Ui.round(this, Ui.alpha(getColor(R.color.accent), 0.18f), 12f));
+        ImageView ic = new ImageView(this);
+        ic.setImageResource(ok ? R.drawable.ic_play : R.drawable.ic_file);
+        ic.setColorFilter(getColor(R.color.accent));
+        int is = Ui.dp(this, 20);
+        iconBox.addView(ic, new FrameLayout.LayoutParams(is, is, Gravity.CENTER));
+        card.addView(iconBox, new LinearLayout.LayoutParams(Ui.dp(this, 44), Ui.dp(this, 44)));
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        clp.setMargins(Ui.dp(this, 12), 0, 0, 0);
+        card.addView(col, clp);
+
+        TextView title = new TextView(this);
+        title.setText(r.label);
+        title.setTextColor(getColor(R.color.text));
+        title.setTextSize(15f);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        col.addView(title);
+
+        TextView sub = new TextView(this);
+        sub.setText(r.sub);
+        sub.setTextColor(getColor(R.color.dim));
+        sub.setTextSize(11f);
+        sub.setMaxLines(2);
+        sub.setPadding(0, Ui.dp(this, 3), 0, 0);
+        col.addView(sub);
+
+        wrap.addView(card, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return wrap;
     }
 
     private View otherView(Row row) {
@@ -1754,6 +1865,7 @@ public class MainActivity extends Activity {
             if (r.type == T_IMAGE) return imageView(r);
             if (r.type == T_ARCHIVE) return archiveView(r);
             if (r.type == T_OTHER) return otherView(r);
+            if (r.type == T_GAME) return gameView(r);
             if (r.type == T_RESTORE) return restoreView(r);
             return itemView(r);
         }

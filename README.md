@@ -26,6 +26,7 @@
 | **外挂弹幕** | 自动加载同名 B 站 `.xml` 弹幕；`弹幕` 按钮里可换文件或手选 `.xml` / `.ass`（弹弹play 导出） |
 | **看图** | 点文件夹里的 `jpg / png / webp / gif` 直接全屏查看；**左右切换（跟手拖拽）与连续下滑两种模式**；双指缩放、双击放大、放大后拖动 |
 | **解压** | 点文件夹里的 `.zip` / `.7z` / `.rar` 直接查看内容并解压：支持 ZipCrypto 与 WinZip AES 加密、rar5、7z（LZMA/LZMA2），以及 **rar / zip / 7z 三种分卷**；需要密码时弹窗输入 |
+| **游戏** | 进到移植版所在文件夹，顶部会出现「启动游戏」卡：**TyranoBuilder 可运行**（内置本地 HTTP 服务 + WebView，不拷游戏）；ONS / KRKR 能识别但暂不支持运行 |
 | **下载** | 顶部「下载」→ 贴 magnet 或选 `.torrent`：内置 BT 引擎（jlibtorrent），支持 DHT/加密/uTP/磁力元数据；后台前台都在下，通知栏显示速度；下完自动停种，可在下载页直接播放 |
 | **压缩** | 管理页勾选文件 → 压缩成 ZIP：流式写入、Zip64、已是压缩格式的自动改存储；有进度、可取消，失败不留半截文件 |
 | **重命名** | 长按任意文件 → 重命名，可改扩展名（`x.mp4` → `x.zip` 直接当压缩包打开）；也可「用其他应用打开」交给系统处理 |
@@ -244,6 +245,27 @@
   同时**不支持加密的 7z**（C 解码器没有 AES 层）
 - 原生库没编进去也能用，只是 7z/rar 会提示「原生库没能加载」，其余功能不受影响
 
+### Galgame 移植版
+
+进到移植版所在的文件夹，如果目录结构对得上，列表顶部会多一张卡：
+
+| 引擎 | 识别特征 | 状态 |
+|---|---|---|
+| **TyranoBuilder**（HTML5） | `index.html` + `tyrano/` 或 `data/` | ✅ 可以直接启动 |
+| **ONS / NScripter** | `*.nsa` / `*.ns2` / `*.sar` / `nscript.dat` / `0.txt` | ⛔ 能认出来，但需要内置 ONScripter 引擎，暂不支持 |
+| **KiriKiri / TVP** | 任意 `*.xp3` | ⛔ 同上，需要 krkrsdl2 |
+
+Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（127.0.0.1），WebView 打开
+`http://127.0.0.1:<端口>/index.html`。
+
+- 不用把几百 MB 的游戏拷进应用目录，直接从 SAF 流式读
+- 端口按游戏路径算，固定下来——WebView 的存档（localStorage）是按 origin 隔离的，端口一变就“丢档”
+- 支持 Range 请求，BGM/视频可以拖动
+- 左上角有个半透明 `×`，点它确认退出；返回键先退网页历史，再退游戏
+
+> ONS / KRKR 不是「调一下就能跑」：它们要的是完整原生引擎（ONScripter 或 krkrsdl2 + SDL2），
+> 属于另一个量级的工程，当前版本只做识别与提示。
+
 ### 下载（磁力 / BT）
 
 顶部「下载」进下载页：贴 `magnet:` 链接点「添加」，或者选一个本地 `.torrent` 文件。
@@ -271,6 +293,7 @@
 | `POST_NOTIFICATIONS` | 显示下载进度通知（Android 13+ 会问一次） |
 
 没有统计、没有广告、没有崩溃上报，APK 里也没有任何第三方网络 SDK——唯一的联网代码是 BT 引擎本身。
+明文 http 只对 `127.0.0.1` 放开（运行 Tyrano 游戏的本地服务），其余域名一律要求 https。
 
 看视频通过系统的 **Storage Access Framework** 访问：只读你亲手选中的那个目录，连相册（MediaStore）都读不到。
 下载写在应用自己的外部目录 `Android/data/com.kanfan.player/files/downloads`，卸载即删，不会污染你的相册。
@@ -301,6 +324,9 @@
 | `Store.java` | 81 | SharedPreferences：播放位置、阅读进度、字号/背景/阅读方式、已添加目录 |
 | `ZoomView.java` | 192 | 单张图画布：双击/双指缩放、放大后拖动 |
 | `Zip.java` | 717 | zip 读取：中央目录 / ZIP64 / deflate / ZipCrypto / WinZip AES，可跨分卷（纯 Java） |
+| `TyranoActivity.java` | 250 | Tyrano 运行器：WebView + 全屏 + 退出确认 + 端口选择 |
+| `GameServer.java` | 308 | 只服务一个 SAF 目录的 HTTP 服务：Range、MIME、路径穿越防护、并发缓存 |
+| `GalGame.java` | 120 | 移植版引擎识别（Tyrano/ONS/KRKR），纯 Java |
 | `TorrentActivity.java` | 587 | 下载页：magnet 输入、选种子、任务列表与操作、下载文件播放 |
 | `TorrentEngine.java` | 500 | BT 引擎外壳：任务增删改查、状态轮询、持久化、文件枚举 |
 | `TorrentService.java` | 166 | 下载前台服务：持有引擎、每秒刷新、通知栏速度 |
@@ -413,9 +439,10 @@ java -cp out/tests VolsTest     # 分卷命名：partN / rNN / zNN / 001，排�
 java -cp out/tests ZipVolTest   # 分卷 zip：现场切卷，跨卷读、缺卷报错
 java -cp out/tests ZipWriteTest # 压缩：存储/deflate/Zip64/UTF-8 名/取消，产物交给 7z t
 java -cp out/tests PdfLayoutTest # PDF 排版：页偏移、可视范围、缩放焦点、平移夹取
+java -cp out/tests GalGameTest    # 移植版引擎识别：Tyrano / ONS / KRKR
 ```
 
-**353 项用例**，目前全部通过：
+**374 项用例**，目前全部通过：
 
 | 用例 | 数量 | 重点覆盖 |
 |---|---:|---|
@@ -430,6 +457,7 @@ java -cp out/tests PdfLayoutTest # PDF 排版：页偏移、可视范围、缩�
 | `VolsTest` | 33 | 新式/旧式 rar、`.z01` 分卷、7-Zip 切卷的归组与排序；`part10` 按数值排；缺卷提示 |
 | `ZipVolTest` | 8 | 把完整 zip 切成 2/3 卷（切点故意不对齐）后跨卷读；少一卷必须报错 |
 | `ZipWriteTest` | 26 | 写出来的包交给 `7z t` 校验；deflate/store、Zip64、未知大小、两万条目、取消 |
+| `GalGameTest` | 21 | Tyrano 目录结构、ONS 各文件名、KRKR 的 xp3、大小写、裸 index.html 不误判 |
 | `PdfLayoutTest` | 41 | 页偏移与总高、可视范围二分、缩放焦点保持、平移夹取、空/坏页不崩 |
 
 > UI 与播放链路仍没有自动化测试 —— 这台开发机上没有安卓设备也没有模拟器，只能装机手测。
@@ -492,6 +520,8 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - 解压需要目录的**写入**权限：v2.2 之前添加的文件夹只有读权限，需要移除后重新添加一次
 - 看图不支持旋转与「保存为」，GIF 在 Android 8 及以下只能看第一帧
 - 阅读器没有书签与标注
+- Galgame 只支持 TyranoBuilder；ONS / KiriKiri 需要原生引擎，当前只做识别与提示
+- Tyrano 只认根目录的 `index.html`；入口在子目录里的自制导出需要手动改结构
 - 下载只支持 magnet 与本地 `.torrent`；不支持 http(s) 种子直链
 - 做种默认关闭；打开后只有 App 进程活着时才上传（杀掉应用即停）
 - BT 引擎是 2018 年的 jlibtorrent 1.2.0.18（libtorrent 1.1.x，GPLv3）；32 位与 64 位都带了 `.so`，
