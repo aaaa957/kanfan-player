@@ -183,6 +183,51 @@
 
 ---
 
+## v3.7 — 2026-11-07
+
+### KRKR 的 OP/ED 视频能播了（内置 krmovie）
+
+之前只能看着黑屏等开场视频过去。这一版把视频链路补齐了：
+
+- **ffmpeg 3.4.13** 用 NDK 交叉编译成 arm64 静态库（LGPL 2.1+，解码器按需裁过），
+  静态链进 `libmain.so`
+- **播放器自己写**：`external/krmovie/krmovie_player.cpp`（约 800 行）——
+  从 `IStream` 读进内存（xp3 里的视频也能读）→ ffmpeg 解码 → swscale 转 RGBA →
+  按引擎约定写双缓冲
+- **音频走 SDL**：swresample 重采样成 S16/44100/立体声 → `SDL_QueueAudio`，
+  用队列长度反推播放位置当**音频时钟**，视频按它对齐
+- 播放控制齐全：播放 / 暂停 / 停止 / 拖动进度 / 按帧跳转
+
+### 顺手把引擎里一段死代码救活了
+
+`krkrsdl2` 的 `VideoOvlImpl.cpp` 共 1582 行，其中 **861 行在 `#if 0` 里**——
+`tTJSNI_VideoOverlay::Open()` 的函数体整段被注释（等于空函数），
+每帧取画面贴到图层的那段泵也在里面。所以以前 `Window.videoOverlay` 是彻底不工作的。
+
+这次重写了：
+
+- `Open()`：建流 → 拿内建播放器 → 申请两块 `tTVPBaseBitmap` → `SetVideoBuffer`
+- **帧泵**：原来的 win32 消息泵换成 `TVPAddContinuousEventHook` 连续回调，
+  每帧 `GetFrontBuffer` → `AssignMainImage` → `Update`
+- `Play/Stop/Close` 相应重写；`WndProc` 从 private 放开，另加 `PostWndProcEvent`
+
+> 这里有个容易踩的约定：引擎给播放器的是 `GetScanLine(height-1)`，即**最后一行**的地址，
+> 所以写入时必须逐行**倒序**，否则画面上下颠倒。
+
+### 代价
+
+- `libmain.so` **8.18 MB → 13.5 MB**（ffmpeg 静态库）
+- APK **13.9 MB → 约 19.2 MB**
+- ffmpeg 是 **LGPL**，静态链接进 GPLv3 的 APK 合规（源码已公开）
+
+### 边界（说清楚）
+
+- 只编了常用解码器：H.264 / HEVC / MPEG4 / VP8 / VP9 / Theora / WMV3 / MSMPEG4 / FLV / RV40 / MJPEG，
+  音频 Vorbis / MP3 / AAC / FLAC / AC3 / Opus；**没有字幕轨**、没有硬件解码
+- **真机仍然没验**：画面、音画同步、seek 都只是编译通过
+
+---
+
 ## v3.6 — 2026-11-07
 
 ### 从 Kirikiroid2 移植 6 个插件

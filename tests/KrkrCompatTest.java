@@ -53,10 +53,10 @@ public class KrkrCompatTest {
         names.add("krmovie");
         names.add("menu");
         KrkrCompat.Report r = KrkrCompat.of(names);
-        eq("内置数", r.builtin.size(), 2);
-        eq("缺失数", r.missing.size(), 2);
+        eq("内置数", r.builtin.size(), 3);
+        eq("缺失数", r.missing.size(), 1);
         ok("有问题", r.hasProblem());
-        ok("krmovie 有提示", !r.hintOf("krmovie").isEmpty());
+        ok("menu 有提示", !r.hintOf("menu").isEmpty());
 
         // 4) 只有内置时不算问题
         Set<String> only = new LinkedHashSet<String>();
@@ -98,7 +98,8 @@ public class KrkrCompatTest {
         write(new File(dir, "readme.md"), "Plugins.link(\"ignored.dll\")");
         KrkrCompat.Report d = KrkrCompat.scanDir(dir);
         ok("扫到了脚本", d.scanned);
-        ok("krmovie 在缺失里", d.missing.contains("krmovie"));
+        ok("krmovie 现在算内建", d.builtin.contains("krmovie"));
+        ok("krmovie 不再报缺失", !d.missing.contains("krmovie"));
         ok("menu 在缺失里", d.missing.contains("menu"));
         ok("wuvorbis 在内置里", d.builtin.contains("wuvorbis"));
         ok("不扫 md", !d.missing.contains("ignored"));

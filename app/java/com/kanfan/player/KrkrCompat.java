@@ -26,12 +26,13 @@ public final class KrkrCompat {
     private static final String[] BUILTIN = {
             "extrans", "wutcwf", "wuvorbis", "fstat", "json", "varfile", "krglhwebp",
             // 从 Kirikiroid2 移植（v3.6）
-            "csvparser", "savestruct", "getsample", "getabout", "fftgraph", "win32dialog"
+            "csvparser", "savestruct", "getsample", "getabout", "fftgraph", "win32dialog",
+            // 内置 ffmpeg 播放器（v3.7）
+            "krmovie"
     };
 
     /** 常见的、krkrsdl2 没有的插件：给出更具体的后果说明 */
     private static final String[][] HINTS = {
-            {"krmovie", "OP/ED 视频播不了，部分游戏会卡在开场视频"},
             {"krflash", "Flash 动画播不了"},
             {"alfmovie", "AlphaMovie 视频播不了"},
             {"agg", "AGG 动画/视频播不了"},

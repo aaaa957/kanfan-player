@@ -295,7 +295,8 @@ Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（
 `csvParser / saveStruct / getSample / getAbout / fftGraph / win32Dialog`（`external/kr2plugins/`）。
 `Plugins.link` 对这些名字直接返回成功，不会因为找不到 `.so` 而抛异常。
 
-还没实现的：`krmovie`（视频）、`layerExSave`、`shrinkCopy`、`PackinOne`、`menu`、`windowEx`。
+**krmovie（视频）也已内置**（v3.7，ffmpeg 解码）。
+还没实现的：`layerExSave`、`shrinkCopy`、`PackinOne`、`menu`、`windowEx`、`layerExMovie`。
 启动前会扫一遍导入目录里的 `.tjs / .ks / .csv / .txt`，把「缺哪些、各自会导致什么」列出来，
 再让你决定「仍然启动 / 取消」——不至于对着一片黑屏猜。
 
@@ -491,7 +492,7 @@ java -cp out/tests GalGameTest    # 移植版引擎识别：Tyrano / ONS / KRKR
 java -cp out/tests KrkrCompatTest # KRKR 插件预检：Plugins.link 解析与缺失分类
 ```
 
-**407 项用例**，目前全部通过：
+**408 项用例**，目前全部通过：
 
 | 用例 | 数量 | 重点覆盖 |
 |---|---:|---|
@@ -572,7 +573,9 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 - 阅读器没有书签与标注
 - Galgame：Tyrano、ONS、KRKR 都可运行（后两者仅 arm64）
 - KRKR 首次启动要复制整个游戏目录，占双份空间；复制中途退出会清掉半成品
-- KRKR 插件只能预检、不能补齐：缺 `krmovie`（OP 视频）、`menu`、`layerExSave` 等的游戏仍可能黑屏
+- KRKR 的视频只支持常见编码（H.264/HEVC/VP8/VP9/WMV3/MSMPEG4…），**没有字幕轨、没有硬解**；
+  音画同步靠音频时钟，极端情况下可能轻微漂移
+- KRKR 插件只能预检、不能补齐：缺 `menu`、`layerExSave` 等的游戏仍可能黑屏
 - 预检只扫未打包的脚本；脚本全在 `data.xp3` 里的游戏扫不到，会直接启动
 - ONS 存档写在游戏目录里，换一个文件夹存档就没了；游戏目录只读时存档会失败
 - Tyrano 只认根目录的 `index.html`；入口在子目录里的自制导出需要手动改结构
@@ -595,6 +598,7 @@ java.lang.NullPointerException: Cannot invoke "String.length()" because "<parame
 
 - **GPLv3**：[jlibtorrent](https://github.com/frostwire/jlibtorrent)（libtorrent 的 Java 绑定）
 - **GPL-2.0-or-later**：[ONScripter](https://github.com/matthewn4444/onscripter-engine-android)（ONS 引擎）
+- **LGPL 2.1+**：[FFmpeg](https://ffmpeg.org/) 3.4.13（krmovie 解码；解码器按需裁剪，静态链接）
 - **MIT + BSD 系**：[krkrsdl2](https://github.com/uyjulian/krkrsdl2) 与 [krkrz](https://github.com/krkrz/krkrz)（KRKR 引擎）
 
 两者兼容，**分发 APK 时整体按 GPLv3 走**。源码本来就公开，满足它们的要求。
