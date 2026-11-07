@@ -289,8 +289,13 @@ Tyrano 的做法：起一个只服务这个文件夹的**本地 HTTP 服务**（
 - 在片库里把这个库文件夹移除时，会提示并把它名下的导入副本一起删掉（原游戏目录不动）
 
 **插件预检**：Kirikiroid2 的汉化移植版常在 `startup.tjs` 里 `Plugins.link("xxx.dll")`。
-krkrsdl2 只内置 7 个（`extrans / wutcwf / wuvorbis / fstat / json / varfile / krglhwebp`），
-其余（`krmovie`、`menu`、`windowEx`、`layerExSave`、`saveStruct`、`csvParser`…）在 Android 上根本没有。
+
+引擎内置 **13 个**：`extrans / wutcwf / wuvorbis / fstat / json / varfile / krglhwebp`，
+加上从 [Kirikiroid2](https://github.com/zeas2/Kirikiroid2) 移植的
+`csvParser / saveStruct / getSample / getAbout / fftGraph / win32Dialog`（`external/kr2plugins/`）。
+`Plugins.link` 对这些名字直接返回成功，不会因为找不到 `.so` 而抛异常。
+
+还没实现的：`krmovie`（视频）、`layerExSave`、`shrinkCopy`、`PackinOne`、`menu`、`windowEx`。
 启动前会扫一遍导入目录里的 `.tjs / .ks / .csv / .txt`，把「缺哪些、各自会导致什么」列出来，
 再让你决定「仍然启动 / 取消」——不至于对着一片黑屏猜。
 
@@ -486,7 +491,7 @@ java -cp out/tests GalGameTest    # 移植版引擎识别：Tyrano / ONS / KRKR
 java -cp out/tests KrkrCompatTest # KRKR 插件预检：Plugins.link 解析与缺失分类
 ```
 
-**403 项用例**，目前全部通过：
+**407 项用例**，目前全部通过：
 
 | 用例 | 数量 | 重点覆盖 |
 |---|---:|---|
@@ -501,7 +506,7 @@ java -cp out/tests KrkrCompatTest # KRKR 插件预检：Plugins.link 解析与�
 | `VolsTest` | 33 | 新式/旧式 rar、`.z01` 分卷、7-Zip 切卷的归组与排序；`part10` 按数值排；缺卷提示 |
 | `ZipVolTest` | 8 | 把完整 zip 切成 2/3 卷（切点故意不对齐）后跨卷读；少一卷必须报错 |
 | `ZipWriteTest` | 26 | 写出来的包交给 `7z t` 校验；deflate/store、Zip64、未知大小、两万条目、取消 |
-| `KrkrCompatTest` | 22 | `Plugins.link` 各种写法、路径归一、内置/缺失分类、目录扫描与忽略非脚本 |
+| `KrkrCompatTest` | 26 | `Plugins.link` 各种写法、路径归一、内置/缺失分类、目录扫描与忽略非脚本 |
 | `GalGameTest` | 21 | Tyrano 目录结构、ONS 各文件名、KRKR 的 xp3、大小写、裸 index.html 不误判 |
 | `PdfLayoutTest` | 41 | 页偏移与总高、可视范围二分、缩放焦点保持、平移夹取、空/坏页不崩 |
 

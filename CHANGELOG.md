@@ -183,6 +183,38 @@
 
 ---
 
+## v3.6 — 2026-11-07
+
+### 从 Kirikiroid2 移植 6 个插件
+
+参考 [Kirikiroid2](https://github.com/zeas2/Kirikiroid2)（BSD 系许可）的源码，把这几只搬进引擎
+（`external/kr2plugins/`，跟着 `BUILTIN_PLUGIN_ENABLE_KR2PLUGINS` 一起编进 `libmain.so`）：
+
+| 插件 | 作用 |
+|---|---|
+| `csvParser.dll` | 读 CSV 表（KAG 的 `@csv` 一类） |
+| `saveStruct.dll` | 结构化存档读写 |
+| `getSample.dll` | 取像素采样 |
+| `getabout.dll` | `System.getAboutString` |
+| `fftgraph.dll` | `drawFFTGraph()`（空实现，防崩） |
+| `win32dialog.dll` | `WIN32Dialog.messageBox` → `System.inform` |
+
+### 顺手修了一个更根本的问题
+
+以前 `Plugins.link("varfile.dll")` 这类调用会去 `dlopen` 找 `varfile.so`，找不到就抛异常——
+**可这些插件是静态编进引擎的，根本没有 .so**。脚本一 `link` 就炸。
+
+现在 `TVPLoadPlugin` 里加了一张内建插件名单，名单内的模块名直接视为链接成功
+（类在引擎启动时就已经注册好了）。名单与 `KrkrCompat` 里的内置表对齐。
+
+### 代价与边界
+
+- `libmain.so` 8.11 MB → 8.18 MB（+72 KB），APK 大小不变
+- 仍然**没有** `krmovie` / `layerExSave` / `shrinkCopy` / `PackinOne` / `menu` / `windowEx`
+- 编译通过 ≠ 跑得起来：这 6 个插件在真机上的表现还没验过
+
+---
+
 ## v3.5 — 2026-11-07
 
 ### 修：子文件夹「隐藏」不生效

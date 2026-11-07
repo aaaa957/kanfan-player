@@ -64,6 +64,20 @@ public class KrkrCompatTest {
         only.add("fstat");
         ok("全内置没问题", !KrkrCompat.of(only).hasProblem());
 
+        // 4b) 从 Kirikiroid2 移植过来的插件，必须算内置（否则预检会白报缺失）
+        // of() 只认 normalize 过的名字（scanDir 走的就是这条路），
+        // 所以这里先用原始写法走一遍 normalize，别拿驼峰名直接喂进去
+        Set<String> ported = new LinkedHashSet<String>();
+        for (String raw : new String[]{"csvParser.dll", "saveStruct.dll", "getSample.dll",
+                "getAbout.dll", "fftGraph.dll", "win32Dialog.dll"}) {
+            ported.add(KrkrCompat.normalize(raw));
+        }
+        eq("归一后是 6 个", ported.size(), 6);
+        KrkrCompat.Report pr = KrkrCompat.of(ported);
+        eq("移植插件全算内置", pr.builtin.size(), 6);
+        eq("移植插件不算缺失", pr.missing.size(), 0);
+        ok("移植插件不报问题", !pr.hasProblem());
+
         // 5) 描述文本要列出缺失的，且不超过 8 条
         StringBuilder many = new StringBuilder();
         for (int i = 0; i < 12; i++) many.append("p").append(i);

@@ -14,14 +14,19 @@ import java.util.regex.Pattern;
  * KRKR 移植版的插件预检。
  *
  * Kirikiroid2 的汉化移植版常在 startup.tjs 里 Plugins.link("xxx.dll")。
- * krkrsdl2 只内置了少数几个插件，其余（krmovie/menu/windowEx/layerExSave…）在 Android 上根本没有，
+ * 引擎内置了十几个（含从 Kirikiroid2 移植的 csvParser/saveStruct 等），其余（krmovie/menu/layerExSave…）还没有，
  * 缺了之后的表现通常是黑屏或一句看不懂的 TJS 报错。这里先扫一遍，把话说明白。
  */
 public final class KrkrCompat {
 
-    /** krkrsdl2 通过 BUILTIN_PLUGIN_ENABLE_* 编进去的插件（CMakeLists.txt） */
+    /**
+     * 引擎里静态编进去的插件（krkrsdl2 的 BUILTIN_PLUGIN_ENABLE_* + 从 Kirikiroid2 移植的 kr2plugins）。
+     * 名字与插件源码里的 NCB_MODULE_NAME 对应，去掉 .dll 后缀。
+     */
     private static final String[] BUILTIN = {
-            "extrans", "wutcwf", "wuvorbis", "fstat", "json", "varfile", "krglhwebp"
+            "extrans", "wutcwf", "wuvorbis", "fstat", "json", "varfile", "krglhwebp",
+            // 从 Kirikiroid2 移植（v3.6）
+            "csvparser", "savestruct", "getsample", "getabout", "fftgraph", "win32dialog"
     };
 
     /** 常见的、krkrsdl2 没有的插件：给出更具体的后果说明 */
@@ -33,10 +38,7 @@ public final class KrkrCompat {
             {"menu", "游戏内右键菜单可能失效"},
             {"windowex", "窗口控制（全屏/尺寸）会失效"},
             {"layerexsave", "截图/存缩略图会失败，存档界面可能报错"},
-            {"savestruct", "结构化存档读写会失败"},
-            {"csvparser", "读 CSV 配置会失败"},
             {"dirlist", "列目录会失败（部分选择界面）"},
-            {"getsample", "取像素采样会失败"},
             {"shrinkcopy", "缩放复制图像会失败"},
             {"packinone", "打包进单个 exe 的资源读不到"},
             {"emoteplayer", "E-mote 立绘动不了"},
