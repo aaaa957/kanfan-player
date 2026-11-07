@@ -130,15 +130,97 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Diag.installHandler(this);
         buildUi();
         loadFolders();
         rescan();
+        openKrkrFromIntent();
+    }
+
+    /**
+     * 调试入口：adb shell am start -n com.kanfan.player/.MainActivity --es krkr &lt;游戏目录&gt;
+     *
+     * 直接进 KRKR，跳过「添加文件夹 → 导入」那套 UI。只在带了 extra 时才生效，
+     * 正常点图标进来完全不受影响；留着是为了以后能在模拟器/真机上快速复现问题。
+     */
+    private void openKrkrFromIntent() {
+        Intent it = getIntent();
+        if (it == null) return;
+        final String path = it.getStringExtra("krkr");
+        if (path == null || path.isEmpty()) return;
+        it.removeExtra("krkr");
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                startKrkrNow(new File(path));
+            }
+        });
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         if (adapter != null) adapter.notifyDataSetChanged();
+        checkKrkrCrash();
+    }
+
+    private boolean krkrReportShown = false;
+
+    /**
+     * 上次 KRKR 启动没活下来时，把现场摊开。
+     *
+     * 判定靠哨兵文件：KrkrActivity 起来 5 秒才删；没删掉说明引擎在原生层崩了。
+     * 有 Java 堆栈时优先报堆栈。
+     */
+    private void checkKrkrCrash() {
+        if (krkrReportShown) return;
+
+        File mark = Diag.sentinel(this);
+        File jc = Diag.javaCrash(this);
+        boolean sentinelLeft = mark.exists();
+        boolean javaCrash = jc.exists() && jc.length() > 0;
+        if (!sentinelLeft && !javaCrash) return;
+
+        krkrReportShown = true;
+        Diag.clear(mark);
+
+        String head = javaCrash
+                ? "上次启动 KRKR 时抛了异常（原生库或 SDL 初始化失败）。"
+                : "上次启动 KRKR 后没活过 5 秒 —— 引擎在原生层崩了。";
+        String body = Diag.report(this, head);
+
+        // 完整内容单独存一份，对话框里只放前 3000 字
+        Diag.write(new File(Diag.dir(this), "last-report.txt"), body);
+        Diag.clear(jc);
+
+        String shown = body.length() > 3000
+                ? body.substring(0, 3000) + "\n\n…（完整内容见 diag/last-report.txt）"
+                : body;
+
+        new AlertDialog.Builder(this)
+                .setTitle("KRKR 启动失败")
+                .setMessage(shown)
+                .setNegativeButton("关闭", null)
+                .setPositiveButton("复制", new DialogInterface.OnClickListener() {
+                    @Override
+                    public void onClick(DialogInterface d, int w) {
+                        copyToClipboard(Diag.tail(new File(Diag.dir(MainActivity.this),
+                                "last-report.txt"), 20000));
+                    }
+                })
+                .show();
+    }
+
+    private void copyToClipboard(String text) {
+        try {
+            android.content.ClipboardManager cm =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("kanfan-diag", text));
+                Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show();
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     // ---------------- 文件夹管理 ----------------

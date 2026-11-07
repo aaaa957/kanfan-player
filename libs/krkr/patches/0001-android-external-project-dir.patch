@@ -1,0 +1,960 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3f51b24..e3fb486 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -19,6 +19,9 @@ option(BUILTIN_PLUGIN_ENABLE_FSTAT "Enable the fstat plugin." ON)
+ option(BUILTIN_PLUGIN_ENABLE_JSON "Enable the json plugin." ON)
+ option(BUILTIN_PLUGIN_ENABLE_VARFILE "Enable the varfile plugin." ON)
+ option(BUILTIN_PLUGIN_ENABLE_KRGLHWEBP "Enable the krglhwebp plugin." ON)
++option(BUILTIN_PLUGIN_ENABLE_KR2PLUGINS "Enable plugins ported from Kirikiroid2 (csvParser/saveStruct/getSample/...)." ON)
++option(BUILTIN_KRKR_VIDEO "Enable ffmpeg-based krmovie player (needs FFMPEG_ROOT)." ON)
++set(FFMPEG_ROOT "" CACHE PATH "预编译 ffmpeg 的安装前缀（含 include/ 和 lib/*.a）")
+ option(KRKRSDL2_EMSCRIPTEN_ENABLE_JS_FALLBACK "Enable JavaScript fallback for the Emscripten build." OFF)
+ option(KRKRSDL2_EMSCRIPTEN_ENABLE_BIGINT "Enable BigInt support for the Emscripten build." ON)
+ option(KRKRSDL2_EMSCRIPTEN_ENABLE_WASM_SIMD "Enable WebAssembly SIMD for the Emscripten build." OFF)
+@@ -134,6 +137,27 @@ file(STRINGS src/config/src_list/krglhwebp/includes.txt KRGLHWEBP_INCLUDES)
+ list(APPEND KRKRSDL2_SRC ${KRGLHWEBP_SRC})
+ list(APPEND KRKRSDL2_INCLUDES ${KRGLHWEBP_INCLUDES})
+ endif()
++if(${BUILTIN_PLUGIN_ENABLE_KR2PLUGINS})
++file(STRINGS src/config/src_list/kr2plugins/sources.txt KR2PLUGINS_SRC)
++file(STRINGS src/config/src_list/kr2plugins/includes.txt KR2PLUGINS_INCLUDES)
++list(APPEND KRKRSDL2_SRC ${KR2PLUGINS_SRC})
++list(APPEND KRKRSDL2_INCLUDES ${KR2PLUGINS_INCLUDES})
++endif()
++
++if(${BUILTIN_KRKR_VIDEO} AND FFMPEG_ROOT)
++file(STRINGS src/config/src_list/krmovie/sources.txt KRMOVIE_SRC)
++file(STRINGS src/config/src_list/krmovie/includes.txt KRMOVIE_INCLUDES)
++list(APPEND KRKRSDL2_SRC ${KRMOVIE_SRC})
++list(APPEND KRKRSDL2_INCLUDES ${KRMOVIE_INCLUDES})
++list(APPEND KRKRSDL2_INCLUDES ${FFMPEG_ROOT}/include)
++list(APPEND KRKRSDL2_LIBS
++	${FFMPEG_ROOT}/lib/libavformat.a
++	${FFMPEG_ROOT}/lib/libavcodec.a
++	${FFMPEG_ROOT}/lib/libswscale.a
++	${FFMPEG_ROOT}/lib/libswresample.a
++	${FFMPEG_ROOT}/lib/libavutil.a
++	z m)
++endif()
+ if(${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
+ list(APPEND KRKRSDL2_SRC src/plugins/kremscripten.cpp)
+ endif()
+@@ -422,6 +446,11 @@ if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.13.0")
+ target_link_options(${KRKRSDL2_NAME} PUBLIC ${KRKRSDL2_LDFLAGS})
+ endif()
+ target_link_libraries(${KRKRSDL2_NAME} ${KRKRSDL2_LIBS})
++if(${BUILTIN_KRKR_VIDEO} AND FFMPEG_ROOT)
++# ffmpeg 的 NEON 汇编写死了对 ff_*_subpel_filters 之类的 PC 相对引用；
++# 静态链进 .so 时这些符号必须本地化，否则报 R_AARCH64_ADR_PREL_PG_HI21。
++target_link_options(${KRKRSDL2_NAME} PRIVATE "-Wl,--exclude-libs,ALL")
++endif()
+ if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.16.0") 
+ if(KRKRSDL2_ENABLE_PRECOMPILED_HEADERS)
+ target_precompile_headers(${KRKRSDL2_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/core/sdl2/SDLPrecompiledHeader.h)
+diff --git a/external/SDL b/external/SDL
+--- a/external/SDL
++++ b/external/SDL
+@@ -1 +1 @@
+-Subproject commit 53dea9830964eee8b5c2a7ee0a65d6e268dc78a1
++Subproject commit 53dea9830964eee8b5c2a7ee0a65d6e268dc78a1-dirty
+diff --git a/external/krkrz b/external/krkrz
+--- a/external/krkrz
++++ b/external/krkrz
+@@ -1 +1 @@
+-Subproject commit 56a48b5894ef22c3b00cfdf403c3b6af9f3aaad9
++Subproject commit 56a48b5894ef22c3b00cfdf403c3b6af9f3aaad9-dirty
+diff --git a/src/config/src_list/kirikirisdl2/includes.txt b/src/config/src_list/kirikirisdl2/includes.txt
+index 3b41239..eeb78d1 100644
+--- a/src/config/src_list/kirikirisdl2/includes.txt
++++ b/src/config/src_list/kirikirisdl2/includes.txt
+@@ -37,3 +37,5 @@ external/simde
+ external/zlib
+ src/config
+ src/plugins
++external/krkrz/visual/win32
++external/krdiag
+diff --git a/src/config/src_list/kirikirisdl2/sources.txt b/src/config/src_list/kirikirisdl2/sources.txt
+index 4e532ab..6bc1c77 100644
+--- a/src/config/src_list/kirikirisdl2/sources.txt
++++ b/src/config/src_list/kirikirisdl2/sources.txt
+@@ -446,3 +446,4 @@ src/core/visual/sdl2/TVPScreen.cpp
+ src/core/visual/sdl2/VideoOvlImpl.cpp
+ src/core/visual/sdl2/WindowImpl.cpp
+ src/core/visual/sdl2/opengl/OpenGLPlatformSDL2.cpp
++external/krdiag/krdiag.cpp
+diff --git a/src/core/base/sdl2/PluginImpl.cpp b/src/core/base/sdl2/PluginImpl.cpp
+index 62e59dc..d6629bb 100644
+--- a/src/core/base/sdl2/PluginImpl.cpp
++++ b/src/core/base/sdl2/PluginImpl.cpp
+@@ -536,10 +536,66 @@ tTVPAtExit TVPDestroyPluginVectorAtExit
+ 	(TVP_ATEXIT_PRI_RELEASE, TVPDestroyPluginVector);
+ #endif
+ //---------------------------------------------------------------------------
++// 内建插件名单
++//---------------------------------------------------------------------------
++// 这些插件的类在引擎启动时（ncbAutoRegister::AllRegist）就已经注册到全局对象上了，
++// 但脚本里的 Plugins.link("xxx.dll") 仍会走 dlopen 找 xxx.so，找不到就抛
++// TVPCannotLinkPlugin，游戏多半会在这里直接崩。
++// 所以这里拦一道：名单内的模块名直接视为「链接成功」。
++// 名字必须与插件源码里的 NCB_MODULE_NAME 一致（比较时不区分大小写）。
++static const tjs_char * const TVPBuiltinPluginNames[] = {
++	TJS_W("csvParser.dll"),
++	TJS_W("saveStruct.dll"),
++	TJS_W("getSample.dll"),
++	TJS_W("getabout.dll"),
++	TJS_W("fftgraph.dll"),
++	TJS_W("win32dialog.dll"),
++	TJS_W("wutcwf.dll"),
++	TJS_W("varfile.dll"),
++	TJS_W("fstat.dll"),
++	TJS_W("json.dll"),
++	TJS_W("extrans.dll"),
++	TJS_W("wuvorbis.dll"),
++	TJS_W("krglhwebp.dll"),
++	TJS_W("krmovie.dll"),      // 引擎内建（external/krmovie，ffmpeg 解码）
++	NULL
++};
++
++static tjs_char TVPLowerAscii(tjs_char c)
++{
++	return (c >= TJS_W('A') && c <= TJS_W('Z')) ? (tjs_char)(c + 32) : c;
++}
++
++static bool TVPNameEqualsNoCase(const tjs_char * a, const tjs_char * b)
++{
++	if(!a || !b) return false;
++	while(*a && *b)
++	{
++		if(TVPLowerAscii(*a) != TVPLowerAscii(*b)) return false;
++		a ++, b ++;
++	}
++	return *a == 0 && *b == 0;
++}
++
++static bool TVPIsBuiltinPlugin(const ttstr & name)
++{
++	// 脚本里可能写成 "plugin/xxx.dll"，只取文件名比较
++	ttstr base = TVPExtractStorageName(name);
++	const tjs_char * p = base.c_str();
++	for(int i = 0; TVPBuiltinPluginNames[i]; i ++)
++	{
++		if(TVPNameEqualsNoCase(p, TVPBuiltinPluginNames[i])) return true;
++	}
++	return false;
++}
++//---------------------------------------------------------------------------
+ static bool TVPPluginLoading = false;
+ void TVPLoadPlugin(const ttstr & name)
+ {
+ #ifdef KRKRSDL2_ENABLE_PLUGINS
++	// 内建插件：类已经注册好了，不需要（也不能）dlopen
++	if(TVPIsBuiltinPlugin(name)) return;
++
+ 	// load plugin
+ 	if(TVPPluginLoading)
+ 		TVPThrowExceptionMessage(TVPCannnotLinkPluginWhilePluginLinking);
+diff --git a/src/core/base/sdl2/SysInitImpl.cpp b/src/core/base/sdl2/SysInitImpl.cpp
+index edd68bf..b713956 100644
+--- a/src/core/base/sdl2/SysInitImpl.cpp
++++ b/src/core/base/sdl2/SysInitImpl.cpp
+@@ -21,6 +21,12 @@
+ #endif
+ 
+ #include "SysInitImpl.h"
++#include "krdiag.h"
++#include <set>
++#include "CharacterSet.h"
++#include <sys/stat.h>
++#include <dirent.h>
++#include <ctype.h>
+ #include "StorageIntf.h"
+ #include "StorageImpl.h"
+ #include "MsgIntf.h"
+@@ -1263,6 +1269,116 @@ void TVPBeforeSystemInit()
+ 	if(TVPProjectDirSelected)
+ 	{
+ 		Application->SetShowMainForm( false );
++
++		std::string nativeUtf8;
++		TVPUtf16ToUtf8(nativeUtf8, TVPNativeProjectDir);
++		KrDiagMark("project dir selected: %s", nativeUtf8.c_str());
++
++		//---------------------------------------------------------------------------
++		// 把项目目录（以及里面的每个 xp3）加进搜索路径。
++		//
++		// krkrsdl2 的 SDL 分支整个漏了这一步：TVPAddAutoPath 在源码里只有
++		// 插件桩导出过，没有任何地方把 TVPProjectDir 注册进去。结果就是
++		// 「Selected project directory」明明对了，"Rebuilding Auto Path Table"
++		// 却永远 "Total 0 file(s) found"，startup.tjs 自然找不到。
++		//
++		// TVPAddAutoPath 末尾会 TVPClearAutoPathCache()，顺带把 AutoPathTableInit
++		// 置回 false，所以下一次查询会按新列表重建表。
++		//---------------------------------------------------------------------------
++		try
++		{
++			TVPAddAutoPath(TVPProjectDir);
++			KrDiagMark("auto path += project dir");
++		}
++		catch(...)
++		{
++			KrDiagMark("TVPAddAutoPath(project) threw");
++		}
++
++		DIR *dirp = opendir(nativeUtf8.c_str());
++		if(dirp)
++		{
++			int mounted = 0;
++			struct dirent *ent;
++			while((ent = readdir(dirp)) != NULL)
++			{
++				std::string fn = ent->d_name;
++				if(fn.size() <= 4) continue;
++				std::string low = fn;
++				for(size_t k = 0; k < low.size(); ++k)
++					low[k] = (char) tolower((unsigned char) low[k]);
++				if(low.compare(low.size() - 4, 4, ".xp3") != 0) continue;
++
++				tjs_string wfn;
++				TVPUtf8ToUtf16(wfn, fn);
++				ttstr arc = TVPProjectDir + ttstr(wfn) + TJS_W(">");
++				try
++				{
++					TVPAddAutoPath(arc);
++					KrDiagMark("auto path += %s>", fn.c_str());
++					mounted++;
++				}
++				catch(...)
++				{
++					KrDiagMark("TVPAddAutoPath(%s) threw", fn.c_str());
++					continue;
++				}
++
++				//---------------------------------------------------------------------------
++				// 子目录也要注册。
++				//
++				// TVPAddAutoPath("x.xp3>") 只会列出 xp3 顶层的文件（TVPRebuildAutoPathTable
++				// 里对含 '/' 的名字直接跳过），而 KAG 的脚本全在 system/ 这类子目录里，
++				// 于是 startup.tjs 里 System.inform 之后的 "system/Initialize.tjs" 必然找不到。
++				//
++				// 这里把 xp3 打开枚举一遍目录，给每个目录补一条 "x.xp3>dir/"。
++				//---------------------------------------------------------------------------
++				try
++				{
++					ttstr xp3Path = TVPProjectDir + ttstr(wfn);
++					tTVPXP3Archive probe(xp3Path);
++					std::set<std::string> dirs;
++					tjs_uint total = probe.GetCount();
++					for(tjs_uint k = 0; k < total; ++k)
++					{
++						ttstr nm = probe.GetName(k);
++						std::string u8;
++						TVPUtf16ToUtf8(u8, nm.AsStdString());
++						size_t slash = u8.rfind('/');
++						if(slash != std::string::npos)
++							dirs.insert(u8.substr(0, slash + 1));
++					}
++					int dc = 0;
++					for(std::set<std::string>::iterator it = dirs.begin(); it != dirs.end(); ++it)
++					{
++						tjs_string wd;
++						TVPUtf8ToUtf16(wd, *it);
++						ttstr full = arc + ttstr(wd);
++						try
++						{
++							TVPAddAutoPath(full);
++							dc++;
++						}
++						catch(...) {}
++					}
++					KrDiagMark("  dirs registered: %d (%u files in archive)", dc, (unsigned) total);
++				}
++				catch(...)
++				{
++					KrDiagMark("  probe xp3 failed: %s", fn.c_str());
++				}
++			}
++			closedir(dirp);
++			KrDiagMark("xp3 mounted: %d", mounted);
++		}
++		else
++		{
++			KrDiagMark("opendir failed: %s", nativeUtf8.c_str());
++		}
++	}
++	else
++	{
++		KrDiagMark("NO project dir selected (engine would show empty screen)");
+ 	}
+ 
+ 	tjs_int buflen = (tjs_int)TJS_strlen(buf);
+@@ -1358,6 +1474,43 @@ void TVPBeforeSystemInit()
+ 	}
+ 
+ #if !defined(__vita__)
++	//---------------------------------------------------------------------------
++	// 命令行传进来的项目目录优先，而且**不**受 TVPProjectDirSelected 限制。
++	//
++	// 原来那段兜底逻辑用 TVPCheckExistentLocalFolder() 判目录，它走 TJS 存储系统，
++	// 对裸的 /sdcard/... 不认（返回 false），于是退回 getcwd()——Android 上那是
++	// /data，引擎就去 /data 找 startup.tjs，必然「Cannot find storage startup.tjs」。
++	// 这里直接用 stat() 判目录，判到了就覆盖之前任何默认值。
++	//---------------------------------------------------------------------------
++	KrDiagMark("project dir scan: argc=%d selected=%d", _argc, (int) TVPProjectDirSelected);
++	for (tjs_int i = 1; i < _argc; i += 1)
++	{
++		if (!_wargv[i]) continue;
++		if (_wargv[i][0] == TJS_W('-') && _wargv[i][1] == TJS_W('-') && _wargv[i][2] == 0)
++			break;
++		if (_wargv[i][0] == TJS_W('-'))
++			continue;
++
++		tjs_string native = _wargv[i];
++		std::string utf8;
++		bool ok8 = TVPUtf16ToUtf8(utf8, native);
++		struct stat st;
++		int rc = ok8 ? stat(utf8.c_str(), &st) : -1;
++		if (rc == 0 && S_ISDIR(st.st_mode))
++		{
++			if (native.length() == 0 || native[native.length() - 1] != u'/')
++				native += u'/';
++			TVPNativeProjectDir = native;
++			TVPProjectDir = TVPNormalizeStorageName(ttstr(native));
++			TVPSetCurrentDirectory(TVPProjectDir);
++			TVPProjectDirSelected = true;
++			KrDiagMark("project dir from argv[%d]: %s", (int) i, utf8.c_str());
++			break;
++		}
++		KrDiagMark("argv[%d] not a readable dir: %s (stat=%d errno=%d)",
++			(int) i, utf8.c_str(), rc, errno);
++	}
++
+ 	if (!TVPProjectDirSelected)
+ 	{
+ 		tjs_string dir_utf16;
+@@ -1443,6 +1596,123 @@ void TVPBeforeSystemInit()
+ 	if (TVPProjectDirSelected)
+ 	{
+ 		TVPAddImportantLog( TVPFormatMessage(TVPInfoSelectedProjectDirectory, TVPProjectDir) );
++
++		//---------------------------------------------------------------------------
++		// 项目目录 + 其中的每个 xp3 都要注册进搜索路径。
++		//
++		// krkrsdl2 的 SDL 分支整个漏了这一步：TVPAddAutoPath 在源码里只被
++		// 插件桩导出过，没有任何地方把 TVPProjectDir 注册进去。所以
++		// "Rebuilding Auto Path Table" 永远 "Total 0 file(s) found"，
++		// startup.tjs 也就永远「Cannot find storage」。
++		//
++		// TVPAddAutoPath 末尾会 TVPClearAutoPathCache()，把 AutoPathTableInit
++		// 置回 false，于是下一次查询会按新列表重建。
++		//---------------------------------------------------------------------------
++		std::string nativeUtf8;
++		TVPUtf16ToUtf8(nativeUtf8, TVPNativeProjectDir);
++		KrDiagMark("registering auto path: %s", nativeUtf8.c_str());
++
++		// 脚本里用的是 "file://./system/bin/video.xp3" 这种相对 storage 名，
++		// 而 "./" 是按进程 cwd 解析的。cwd 不在项目目录时会跑到 /system/bin 去找。
++		if(chdir(nativeUtf8.c_str()) == 0)
++			KrDiagMark("chdir ok");
++		else
++			KrDiagMark("chdir failed (errno=%d)", errno);
++
++		try
++		{
++			TVPAddAutoPath(TVPProjectDir);
++			KrDiagMark("auto path += project dir");
++		}
++		catch(...)
++		{
++			KrDiagMark("TVPAddAutoPath(project) threw");
++		}
++
++		DIR *dirp = opendir(nativeUtf8.c_str());
++		if(dirp)
++		{
++			int mounted = 0;
++			struct dirent *ent;
++			while((ent = readdir(dirp)) != NULL)
++			{
++				std::string fn = ent->d_name;
++				if(fn.size() <= 4) continue;
++				std::string low = fn;
++				for(size_t k = 0; k < low.size(); ++k)
++					low[k] = (char) tolower((unsigned char) low[k]);
++				if(low.compare(low.size() - 4, 4, ".xp3") != 0) continue;
++
++				tjs_string wfn;
++				TVPUtf8ToUtf16(wfn, fn);
++				ttstr arc = TVPProjectDir + ttstr(wfn) + TJS_W(">");
++				try
++				{
++					TVPAddAutoPath(arc);
++					KrDiagMark("auto path += %s>", fn.c_str());
++					mounted++;
++				}
++				catch(...)
++				{
++					KrDiagMark("TVPAddAutoPath(%s) threw", fn.c_str());
++					continue;
++				}
++
++				//---------------------------------------------------------------------------
++				// 子目录也要注册。
++				//
++				// TVPAddAutoPath("x.xp3>") 只列 xp3 顶层文件（TVPRebuildAutoPathTable 对含
++				// '/' 的名字直接跳过），而 KAG 的脚本全在 system/ 这类子目录里，
++				// 所以 startup.tjs 里接下来要加载的 "system/Initialize.tjs" 必然找不到。
++				//---------------------------------------------------------------------------
++				try
++				{
++					ttstr xp3Path = TVPProjectDir + ttstr(wfn);
++					tTVPXP3Archive probe(xp3Path);
++					std::set<std::string> dirs;
++					tjs_uint total = probe.GetCount();
++					for(tjs_uint k = 0; k < total; ++k)
++					{
++						ttstr nm = probe.GetName(k);
++						std::string u8;
++						TVPUtf16ToUtf8(u8, nm.AsStdString());
++						size_t slash = u8.rfind('/');
++						if(slash != std::string::npos)
++							dirs.insert(u8.substr(0, slash + 1));
++					}
++					int dc = 0;
++					{
++						int shown = 0;
++						for(std::set<std::string>::iterator it = dirs.begin();
++							it != dirs.end() && shown < 24; ++it, ++shown)
++							KrDiagMark("    dir: %s", it->c_str());
++					}
++					for(std::set<std::string>::iterator it = dirs.begin(); it != dirs.end(); ++it)
++					{
++						tjs_string wd;
++						TVPUtf8ToUtf16(wd, *it);
++						ttstr full = arc + ttstr(wd);
++						try
++						{
++							TVPAddAutoPath(full);
++							dc++;
++						}
++						catch(...) {}
++					}
++					KrDiagMark("  dirs registered: %d (%u files in archive)", dc, (unsigned) total);
++				}
++				catch(...)
++				{
++					KrDiagMark("  probe xp3 failed: %s", fn.c_str());
++				}
++			}
++			closedir(dirp);
++			KrDiagMark("xp3 mounted: %d", mounted);
++		}
++		else
++		{
++			KrDiagMark("opendir failed (errno=%d): %s", errno, nativeUtf8.c_str());
++		}
+ 	}
+ }
+ //---------------------------------------------------------------------------
+diff --git a/src/core/environ/sdl2/Application.cpp b/src/core/environ/sdl2/Application.cpp
+index 2938672..8bdd6ed 100644
+--- a/src/core/environ/sdl2/Application.cpp
++++ b/src/core/environ/sdl2/Application.cpp
+@@ -2,6 +2,7 @@
+ #define INITGUID // XP 有効にするとdxguid.libが使用できないため
+ #endif
+ #include "tjsCommHead.h"
++#include "krdiag.h"
+ 
+ #include <algorithm>
+ #include <string>
+@@ -118,6 +119,15 @@ static MemoryLeaksDebugBreakPoint gMemoryLeaksDebugBreakPoint;
+ #endif
+ #endif
+ tjs_string ExePath() {
++	//---------------------------------------------------------------------------
++	// Android 上没有 /proc/self/exe，后面会退化成 argv[0]（也就是 "app_process"），
++	// 于是 System.exePath 变成 "file://./"。脚本里 "exePath + system/bin/x.xp3"
++	// 就被拼成绝对路径 /system/bin/x.xp3，必然找不到。
++	// 项目目录确定后直接用它顶替——对脚本来说，这就是"游戏所在目录"。
++	//---------------------------------------------------------------------------
++	if (TVPProjectDirSelected && !TVPNativeProjectDir.empty())
++		return TVPNativeProjectDir;
++
+ #if 0
+ 	tjs_char szFull[_MAX_PATH];
+ 	::GetModuleFileName(NULL, szFull, sizeof(szFull) / sizeof(tjs_char));
+@@ -490,7 +500,16 @@ bool tTVPApplication::StartApplication( int argc, tjs_char* argv[] ) {
+ 		image_load_thread_->StartTread();
+ #endif
+ 
+-		if(TVPProjectDirSelected) TVPInitializeStartupScript();
++		if(TVPProjectDirSelected)
++		{
++			KrDiagMark("calling TVPInitializeStartupScript");
++			TVPInitializeStartupScript();
++			KrDiagMark("TVPInitializeStartupScript returned");
++		}
++		else
++		{
++			KrDiagMark("skip TVPInitializeStartupScript (no project dir)");
++		}
+ 
+ #if 0
+ 		Run();
+diff --git a/src/core/sdl2/SDLApplication.cpp b/src/core/sdl2/SDLApplication.cpp
+index fde4366..5fc2aec 100644
+--- a/src/core/sdl2/SDLApplication.cpp
++++ b/src/core/sdl2/SDLApplication.cpp
+@@ -29,6 +29,8 @@
+ 
+ #include <unistd.h>
+ 
++#include "krdiag.h"
++
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten.h>
+ #include <emscripten/html5.h>
+@@ -2635,6 +2637,17 @@ extern "C" int wmain(int argc, wchar_t **argv)
+ extern "C" int main(int argc, char **argv)
+ #endif
+ {
++	// 诊断：先建日志、装崩溃处理，再把命令行原样记下来。
++	// 真机上「一点就闪退」时，这个文件是唯一能看到的东西。
++	KrDiagInit();
++	KrDiagInstallCrashHandler();
++	KrDiagMark("SDL_main enter argc=%d", argc);
++#ifndef _WIN32
++	for (int di = 0; di < argc; di += 1)
++	{
++		KrDiagMark("  argv[%d]=%s", di, argv[di] ? argv[di] : "(null)");
++	}
++#endif
+ #ifdef _WIN32
+ 	_argc = argc;
+ 	_wargv = argv;
+@@ -2692,6 +2705,7 @@ extern "C" int main(int argc, char **argv)
+ #endif
+ 
+ 	::Application = new tTVPApplication();
++	KrDiagMark("Application created, calling StartApplication");
+ 	if (::Application->StartApplication( _argc, _wargv ))
+ 	{
+ 		return 0;
+@@ -2702,6 +2716,7 @@ extern "C" int main(int argc, char **argv)
+ #else
+ 	while (process_events());
+ #endif
++	KrDiagMark("main loop exited");
+ 	return 0;
+ }
+ 
+diff --git a/src/core/visual/sdl2/VideoOvlImpl.cpp b/src/core/visual/sdl2/VideoOvlImpl.cpp
+index b10f9da..96bacd7 100644
+--- a/src/core/visual/sdl2/VideoOvlImpl.cpp
++++ b/src/core/visual/sdl2/VideoOvlImpl.cpp
+@@ -20,9 +20,30 @@
+ #include "LayerBitmapIntf.h"
+ #include "SysInitIntf.h"
+ #include "StorageImpl.h"
+-#if 0
+-#include "krmovie.h"
++// krmovie 接口是 win32 风格（HWND/RECT/HDC/__int64），这里垫一下
++#ifndef _WIN32
++#ifndef __int64
++#define __int64 long long
++#endif
++typedef void *HWND;
++typedef void *HDC;
++typedef long LONG_PTR;
++typedef struct tagRECT { long left, top, right, bottom; } RECT;
+ #endif
++#include "krmovie.h"
++
++// 内建 krmovie（external/krmovie）：拿函数指针直接调，不走 dlopen
++struct tTVPBuiltinVideoModule
++{
++	void *GetAPIVersion;
++	void *GetVideoOverlayObject;
++	void *GetVideoLayerObject;
++	void *GetMixingVideoOverlayObject;
++	void *GetMFVideoOverlayObject;
++};
++extern void TVPGetBuiltinKrMovieModule(tTVPBuiltinVideoModule *out);
++typedef void (*tTVPGetOverlayProc)(HWND, IStream *, const wchar_t *, const wchar_t *,
++	unsigned __int64, iTVPVideoOverlay **);
+ #include "PluginImpl.h"
+ #include "WaveImpl.h"  // for DirectSound attenuate <-> TVP volume
+ #if 0
+@@ -253,189 +274,80 @@ void TJS_INTF_METHOD tTJSNI_VideoOverlay::Invalidate()
+ //---------------------------------------------------------------------------
+ void tTJSNI_VideoOverlay::Open(const ttstr &_name)
+ {
+-#if 0
+-	// open
+-
+-	// first, close
+ 	Close();
+ 
++	// 打开 storage（xp3 里的视频也能读）
++	tTJSBinaryStream *stream0 = TVPCreateStream(_name);
++	IStream *istream = new tTVPIStreamAdapter(stream0);
++	long size = (long)stream0->GetSize();
+ 
+-	// check window
+-	if(!Window) TVPThrowExceptionMessage(TVPWindowAlreadyMissing);
++	tTVPBuiltinVideoModule mod;
++	TVPGetBuiltinKrMovieModule(&mod);
++	tTVPGetOverlayProc proc = (tTVPGetOverlayProc)mod.GetVideoLayerObject;
++		// 四个入口指向同一实现：都按「双缓冲 + 引擎自己贴到图层」这条路走
+ 
+-	// open target storage
+-	ttstr name(_name);
+-	ttstr param;
+-
+-	const tjs_char * param_pos;
+-	int param_pos_ind;
+-	param_pos = TJS_strchr(name.c_str(), TJS_W('?'));
+-	param_pos_ind = (int)(param_pos - name.c_str());
+-	if(param_pos != NULL)
+-	{
+-		param = param_pos;
+-		name = ttstr(name, param_pos_ind);
+-	}
+-
+-	IStream *istream = NULL;
+-	long size;
+-	bool flash;
+-	ttstr ext = TVPExtractStorageExt(name).c_str();
++	ttstr ext = TVPExtractStorageExt(_name).c_str();
+ 	ext.ToLowerCase();
+ 
+-	tTVPVideoModule *mod = NULL;
+-	if(ext == TJS_W(".swf"))
++	try
+ 	{
+-		// shockwave flash movie
+-		flash = true;
+-
+-		// load krflash.dll
+-		mod = TVPGetFlashVideoModule();
+-
+-		// prepare local storage
+-		if(LocalTempStorageHolder)
+-			delete LocalTempStorageHolder, LocalTempStorageHolder = NULL;
+-
+-		// find local name
+-		ttstr placed = TVPSearchPlacedPath(name);
+-
+-		// open and hold
+-		LocalTempStorageHolder =
+-			new tTVPLocalTempStorageHolder(placed);
++		// 名字传空：播放器直接读 istream，不看文件名
++		proc((HWND)EventQueue.GetOwner(), istream, L"", L"",
++			(unsigned __int64)size, &VideoOverlay);
+ 	}
+-	else
++	catch(...)
+ 	{
+-		flash = false;
+-
+-		// load krmovie.dll
+-		mod = TVPGetMovieVideoModule();
+-
+-		// prepate IStream
+-		tTJSBinaryStream *stream0 = NULL;
+-		try
+-		{
+-			stream0 = TVPCreateStream(name);
+-			size = (long)stream0->GetSize();
+-		}
+-		catch(...)
+-		{
+-			if(stream0) delete stream0;
+-			throw;
+-		}
+-
+-		istream = new tTVPIStreamAdapter(stream0);
++		istream->Release();
++		Close();
++		throw;
+ 	}
++	istream->Release();
+ 
+-	// 'istream' is an IStream instance at this point
+-
+-	// create video overlay object
+-#if 1
+-	try
+-	{
+-		if(flash)
+-		{
+-			mod->GetVideoOverlayObject(EventQueue.GetOwner(),
+-				NULL, (LocalTempStorageHolder->GetLocalName() + param).c_str(),
+-				ext.c_str(), 0, &VideoOverlay);
+-		}
+-		else
+-		{
+-#if 0
+-			if(Mode == vomLayer)
+-				GetVideoLayerObject(EventQueue.GetOwner(), istream, name.c_str(), ext.c_str(), size, &VideoOverlay);
+-			else if(Mode == vomMixer)
+-				GetMixingVideoOverlayObject(EventQueue.GetOwner(), istream, name.c_str(), ext.c_str(), size, &VideoOverlay);
+-			else if(Mode == vomMFEVR)
+-				GetMFVideoOverlayObject(EventQueue.GetOwner(), istream, name.c_str(), ext.c_str(), size, &VideoOverlay);
+-			else
+-				GetVideoOverlayObject(EventQueue.GetOwner(), istream, name.c_str(), ext.c_str(), size, &VideoOverlay);
+-#else
+-			if(Mode == vomLayer)
+-				mod->GetVideoLayerObject(EventQueue.GetOwner(),
+-					istream, name.c_str(), ext.c_str(),
+-					size, &VideoOverlay);
+-			else if(Mode == vomMixer)
+-				mod->GetMixingVideoOverlayObject(EventQueue.GetOwner(),
+-					istream, name.c_str(), ext.c_str(),
+-					size, &VideoOverlay);
+-			else if(Mode == vomMFEVR)
+-				mod->GetMFVideoOverlayObject(EventQueue.GetOwner(),
+-					istream, name.c_str(), ext.c_str(),
+-					size, &VideoOverlay);
+-			else
+-				mod->GetVideoOverlayObject(EventQueue.GetOwner(),
+-					istream, name.c_str(), ext.c_str(),
+-					size, &VideoOverlay);
+-#endif
+-		}
++	if(!VideoOverlay)
++		TVPThrowExceptionMessage(TJS_W("Cannot open video file"));
+ 
+-		if( flash || (Mode == vomOverlay) || (Mode == vomMixer) || (Mode == vomMFEVR) )
+-		{
+-			ResetOverlayParams();
+-		}
+-		else
+-		{	// set font and back buffer to layerVideo
+-			long	width, height;
+-			long			size;
+-			VideoOverlay->GetVideoSize( &width, &height );
+-
+-			if( width <= 0 || height <= 0 )
+-				TVPThrowExceptionMessage(TVPErrorInKrMovieDLL, (const tjs_char*)TVPInvalidVideoSize);
+-
+-			size = width * height * 4;
+-			if( Bitmap[0] != NULL )
+-				delete Bitmap[0];
+-			if( Bitmap[1] != NULL )
+-				delete Bitmap[1];
+-			Bitmap[0] = new tTVPBaseBitmap( width, height, 32 );
+-			Bitmap[1] = new tTVPBaseBitmap( width, height, 32 );
+-
+-			BmpBits[0] = static_cast<BYTE*>(Bitmap[0]->GetBitmap()->GetScanLine( Bitmap[0]->GetBitmap()->GetHeight()-1 ));
+-			BmpBits[1] = static_cast<BYTE*>(Bitmap[1]->GetBitmap()->GetScanLine( Bitmap[1]->GetBitmap()->GetHeight()-1 ));
+-			//BmpBits[0] = static_cast<BYTE*>(Bitmap[0]->GetBitmap()->GetScanLine( 0 ));
+-			//BmpBits[1] = static_cast<BYTE*>(Bitmap[1]->GetBitmap()->GetScanLine( 0 ));
+-
+-			VideoOverlay->SetVideoBuffer( BmpBits[0], BmpBits[1], size );
+-		}
+-	}
+-	catch(...)
++	// 双缓冲由引擎申请，播放器往里写
++	long width = 0, height = 0;
++	VideoOverlay->GetVideoSize(&width, &height);
++	if(width <= 0 || height <= 0)
+ 	{
+-		if(istream) istream->Release();
+ 		Close();
+-		throw;
++		TVPThrowExceptionMessage(TJS_W("Invalid video size"));
+ 	}
+-	if(istream) istream->Release();
+ 
+-#endif
+-	// set Status
+-	ClearWndProcMessages();
+-	SetStatus(tTVPVideoOverlayStatus::Stop);
+-#endif
++	if(Bitmap[0]) { delete Bitmap[0]; Bitmap[0] = NULL; }
++	if(Bitmap[1]) { delete Bitmap[1]; Bitmap[1] = NULL; }
++	Bitmap[0] = new tTVPBaseBitmap(width, height, 32);
++	Bitmap[1] = new tTVPBaseBitmap(width, height, 32);
++
++	// ★ krmovie 的约定：给播放器的是「最后一行」的地址
++	BmpBits[0] = (tjs_uint8*)Bitmap[0]->GetScanLine(height - 1);
++	BmpBits[1] = (tjs_uint8*)Bitmap[1]->GetScanLine(height - 1);
++
++	VideoOverlay->SetVideoBuffer(BmpBits[0], BmpBits[1], width * height * 4);
++	VideoOverlay->SetVisible(Visible);
++
++	RECT rc;
++	rc.left = Rect.left; rc.top = Rect.top;
++	rc.right = Rect.right; rc.bottom = Rect.bottom;
++	VideoOverlay->SetRect(&rc);
+ }
+ //---------------------------------------------------------------------------
+ void tTJSNI_VideoOverlay::Close()
+ {
+-#if 0
+-	// close
+-	// release VideoOverlay object
++	if(PumpHooked)
++	{
++		TVPRemoveContinuousEventHook(this);
++		PumpHooked = false;
++	}
+ 	if(VideoOverlay)
+ 	{
+-		VideoOverlay->Release(), VideoOverlay = NULL;
+-		::SetFocus(Window->GetWindowHandle());
++		VideoOverlay->Release();
++		VideoOverlay = NULL;
+ 	}
+-	if(LocalTempStorageHolder)
+-		delete LocalTempStorageHolder, LocalTempStorageHolder = NULL;
+-	ClearWndProcMessages();
+-	SetStatus(tTVPVideoOverlayStatus::Unload);
+-
+-	if( Bitmap[0] )
+-		delete Bitmap[0];
+-	if( Bitmap[1] )
+-		delete Bitmap[1];
+-
+-	Bitmap[0] = Bitmap[1] = NULL;
++	if(Bitmap[0]) { delete Bitmap[0]; Bitmap[0] = NULL; }
++	if(Bitmap[1]) { delete Bitmap[1]; Bitmap[1] = NULL; }
+ 	BmpBits[0] = BmpBits[1] = NULL;
+-#endif
+ }
+ //---------------------------------------------------------------------------
+ void tTJSNI_VideoOverlay::Shutdown()
+@@ -469,28 +381,24 @@ void tTJSNI_VideoOverlay::Disconnect()
+ //---------------------------------------------------------------------------
+ void tTJSNI_VideoOverlay::Play()
+ {
+-#if 0
+-	// start playing
+-	if(VideoOverlay)
++	if(!VideoOverlay) return;
++	VideoOverlay->Play();
++	// 原来的 win32 版靠消息泵逐帧取画面；这里挂连续事件回调
++	if(!PumpHooked)
+ 	{
+-		VideoOverlay->Play();
+-		ClearWndProcMessages();
+-		if( Mode != vomMFEVR ) SetStatus(tTVPVideoOverlayStatus::Play);
++		TVPAddContinuousEventHook(this);
++		PumpHooked = true;
+ 	}
+-#endif
+ }
+ //---------------------------------------------------------------------------
+ void tTJSNI_VideoOverlay::Stop()
+ {
+-#if 0
+-	// stop playing
+-	if(VideoOverlay)
++	if(PumpHooked)
+ 	{
+-		VideoOverlay->Stop();
+-		ClearWndProcMessages();
+-		if( Mode != vomMFEVR ) SetStatus(tTVPVideoOverlayStatus::Stop);
++		TVPRemoveContinuousEventHook(this);
++		PumpHooked = false;
+ 	}
+-#endif
++	if(VideoOverlay) VideoOverlay->Stop();
+ }
+ //---------------------------------------------------------------------------
+ void tTJSNI_VideoOverlay::Pause()
+@@ -696,6 +604,31 @@ void tTJSNI_VideoOverlay::DetachVideoOverlay()
+ #endif
+ }
+ //---------------------------------------------------------------------------
++// 每帧从播放器取新画面，塞给 Layer1 / Layer2。
++// 原来这段逻辑在 WndProc 里（win32 的消息泵），SDL 这边改成连续事件回调。
++//---------------------------------------------------------------------------
++void TJS_INTF_METHOD tTJSNI_VideoOverlay::OnContinuousCallback(tjs_uint64 tick)
++{
++	if(!VideoOverlay || !Bitmap[0]) return;
++
++	BYTE *front = NULL;
++	VideoOverlay->GetFrontBuffer(&front);
++	if(!front) return;   // 还没有新帧
++
++	class tTVPBaseBitmap *img = (front == BmpBits[0]) ? Bitmap[0] : Bitmap[1];
++
++	if(Layer1)
++	{
++		Layer1->AssignMainImage(img);
++		Layer1->Update();
++	}
++	if(Layer2)
++	{
++		Layer2->AssignMainImage(img);
++		Layer2->Update();
++	}
++}
++//---------------------------------------------------------------------------
+ void tTJSNI_VideoOverlay::SetRectOffset(tjs_int ofsx, tjs_int ofsy)
+ {
+ #if 0
+diff --git a/src/core/visual/sdl2/VideoOvlImpl.h b/src/core/visual/sdl2/VideoOvlImpl.h
+index 60a0504..e6ea28d 100644
+--- a/src/core/visual/sdl2/VideoOvlImpl.h
++++ b/src/core/visual/sdl2/VideoOvlImpl.h
+@@ -21,12 +21,14 @@
+ #include "voMode.h"
+ 
+ #include "NativeEventQueue.h"
++#include "EventIntf.h"
+ 
+ //---------------------------------------------------------------------------
+ // tTJSNI_VideoOverlay : VideoOverlay Native Instance
+ //---------------------------------------------------------------------------
+ class iTVPVideoOverlay;
+-class tTJSNI_VideoOverlay : public tTJSNI_BaseVideoOverlay
++class tTJSNI_VideoOverlay : public tTJSNI_BaseVideoOverlay,
++	public tTVPContinuousEventCallbackIntf
+ {
+ 	typedef tTJSNI_BaseVideoOverlay inherited;
+ 
+@@ -48,10 +50,8 @@ class tTJSNI_VideoOverlay : public tTJSNI_BaseVideoOverlay
+ 	tTVPVideoOverlayMode	Mode;	//!< Modeの動的な変更は出来ない。open前にセットしておくこと
+ 	bool	Loop;
+ 
+-#if 0
+-	class tTVPBaseBitmap	*Bitmap[2];	//!< Layer描画用バッファ用Bitmap
+-	BYTE			*BmpBits[2];
+-#endif
++	class tTVPBaseBitmap	*Bitmap[2];	//!< 每帧画面的两块缓冲（引擎持有，播放器往里写）
++	tjs_uint8		*BmpBits[2];	//!< 指向 Bitmap 的**最后一行**（krmovie 约定）
+ 
+ 	bool	IsPrepare;			//!< 準備モードかどうか
+ 
+@@ -63,6 +63,8 @@ class tTJSNI_VideoOverlay : public tTJSNI_BaseVideoOverlay
+ 	bool	IsEventPast;
+ 	int		EventFrame;		//!< イベントを発生させるフレーム
+ 
++	bool	PumpHooked;		//!< 是否已挂上连续事件钩子
++
+ public:
+ 	tTJSNI_VideoOverlay();
+ 	tjs_error TJS_INTF_METHOD Construct(tjs_int numparams, tTJSVariant **param,
+@@ -194,9 +196,16 @@ public:
+ 	void SetRectOffset(tjs_int ofsx, tjs_int ofsy);
+ 	void DetachVideoOverlay();
+ 
+-private:
++	// krmovie 插件要把「播放进度/播完」这类事件塞回这个窗口对象。
++	// 上游是 private + win32 的消息泵；这里放开一格，只给插件用。
+ 	void WndProc( NativeEvent& ev );
+-		// UtilWindow's window procedure
++
++	// 每帧从播放器取新画面，塞给 Layer1/Layer2（原来是 win32 消息泵干的活）
++	virtual void TJS_INTF_METHOD OnContinuousCallback(tjs_uint64 tick);
++	// 给别的线程用（解码线程不能直接调 WndProc）
++	void PostWndProcEvent( const NativeEvent& ev ) { EventQueue.PostEvent( ev ); }
++
++private:
+ 	void ClearWndProcMessages(); // clear WndProc's message queue
+ 
+ };

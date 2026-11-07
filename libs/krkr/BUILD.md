@@ -101,3 +101,54 @@ Windows 上没有 make，可以从 MSYS2 取一个独立的：
 - 播放器在 `external/krmovie/krmovie_player.cpp`，ffmpeg 解码 + SDL 音频
 
 ★ 约定：给播放器的缓冲是 `GetScanLine(height-1)`（**最后一行**），写入必须逐行倒序。
+
+---
+
+## v3.8 追加：让引擎从**外部目录**启动游戏
+
+krkrsdl2 的 SDL 分支原本只支持「游戏打包进 assets」，从命令行传目录这条路是坏的。
+在真机/模拟器上表现为「点击启动 → 一闪 → 回桌面」。完整补丁见
+`patches/0001-android-external-project-dir.patch`，共 5 处：
+
+### 1) 项目目录改用 `stat()` 判定（`SysInitImpl.cpp`）
+
+原来的兜底逻辑用 `TVPCheckExistentLocalFolder()` 判目录，它走 TJS 存储系统，
+对裸的 `/sdcard/...`、`/data/data/...` **一律返回 false**，于是退回 `getcwd()`。
+Android 上 cwd 是 `/data`，引擎就去 `/data` 找 `startup.tjs`，必然 `Cannot find storage`。
+
+### 2) 项目目录 / xp3 / xp3 子目录 都要 `TVPAddAutoPath`
+
+整个源码里 `TVPAddAutoPath` **只被插件桩导出过，没有任何地方注册项目目录**，
+所以 `Rebuilding Auto Path Table` 永远是 `Total 0 file(s) found`。
+
+补法是：项目目录注册一次；每个 `*.xp3` 注册成 `xxx.xp3>`；
+再用 `tTVPXP3Archive` 枚举 xp3 内的目录，逐个注册 `xxx.xp3>system/` 这种。
+（`TVPAddAutoPath("x.xp3>")` 只列**顶层**文件，`TVPRebuildAutoPathTable` 对含 `/` 的名字直接跳过。）
+
+### 3) 脚本编码回退 CP932（`TextStream.cpp` + `sjis_table.h`）
+
+老游戏的 `startup.tjs` / `Initialize.tjs` 是 Shift-JIS。原来的解码只认
+`UTF-8` 和 `Shift_JIS`，而后者用的是系统 `mbrtowc`（Android 上是 UTF-8），
+所以日文一出现就抛 `Cannot convert given narrow string to wide string`。
+
+补法：UTF-8 解失败时用 `sjis_table.h`（CP932→UTF-16，Python 生成，9604 项）重解。
+
+### 4) `ExePath()` 返回项目目录（`Application.cpp`）
+
+Android 没有 `/proc/self/exe`，`ExePath()` 会退化成 `argv[0]` = `"app_process"`，
+于是 `System.exePath` 变成 `file://./`。脚本里 `System.exePath + "system/bin/video.xp3"`
+就被拼成 `file://./system/bin/video.xp3` —— 而 `file://./` 的 `.` 是 **host**，
+后面的路径按**绝对路径**解析，与 cwd 无关，必然找不到。
+
+### 5) 新增 `external/krdiag`
+
+崩溃信号处理（SIGSEGV/SIGABRT/… + `_Unwind_Backtrace`，只记模块名和模块内偏移，
+配未 strip 的 `.so` 用 `llvm-addr2line` 还原）、分段打点、SDL_Log 重定向。
+日志落在 `Android/data/<包名>/files/diag/krkr-native.log`，用户能直接看到。
+
+### 另外两处（非引擎）
+
+- **`system/bin` 软链**：部分「kirikiroid 专版」把 `system/bin/*.xp3` 提到根目录，
+  脚本仍按老路径加载。`KrkrActivity.prepareLayout()` 给根目录每个 `.xp3` 在
+  `system/bin/` 下建软链（失败退硬链）。
+- **调试入口**：`am start ... --es krkr <目录>` 可跳过 SAF 直接进引擎，便于自动化。

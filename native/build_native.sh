@@ -70,6 +70,8 @@ WHICH="${1:-all}"
 case "$WHICH" in
   arm64-v8a)   build_abi arm64-v8a aarch64-linux-android21 ;;
   armeabi-v7a) build_abi armeabi-v7a armv7a-linux-androideabi21 ;;
+  # x86_64 只给模拟器测试用，不进发布 APK（所以 all 里不含它）
+  x86_64)      build_abi x86_64 x86_64-linux-android21 ;;
   all)
     build_abi arm64-v8a aarch64-linux-android21 &&
     build_abi armeabi-v7a armv7a-linux-androideabi21

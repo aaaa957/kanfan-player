@@ -119,6 +119,12 @@ import sys, os, shutil, zipfile
 out = sys.argv[1]
 root = sys.argv[2]
 shutil.copyfile(os.path.join(out, "base.apk"), os.path.join(out, "unsigned.apk"))
+# KANFAN_ABIS=x86_64 时只打指定 ABI（模拟器测试用，避免 APK 里塞两套 .so）
+_abis = os.environ.get("KANFAN_ABIS", "").strip()
+_allow = set(a.strip() for a in _abis.split(",") if a.strip()) if _abis else None
+def want(abi):
+    return _allow is None or abi in _allow
+
 with zipfile.ZipFile(os.path.join(out, "unsigned.apk"), "a", zipfile.ZIP_DEFLATED) as z:
     z.write(os.path.join(out, "dex", "classes.dex"), "classes.dex")
     print("   已写入 classes.dex")
@@ -127,6 +133,8 @@ with zipfile.ZipFile(os.path.join(out, "unsigned.apk"), "a", zipfile.ZIP_DEFLATE
     count = 0
     if os.path.isdir(nat):
         for abi in sorted(os.listdir(nat)):
+            if not want(abi):
+                continue
             so = os.path.join(nat, abi, "libkanfan.so")
             if os.path.isfile(so):
                 z.write(so, "lib/%s/libkanfan.so" % abi)
@@ -143,6 +151,8 @@ with zipfile.ZipFile(os.path.join(out, "unsigned.apk"), "a", zipfile.ZIP_DEFLATE
             d = os.path.join(base, abi)
             if not os.path.isdir(d):
                 continue
+            if not want(abi):
+                continue
             for f in sorted(os.listdir(d)):
                 if f.endswith(".so"):
                     z.write(os.path.join(d, f), "lib/%s/%s" % (abi, f))
@@ -151,6 +161,8 @@ with zipfile.ZipFile(os.path.join(out, "unsigned.apk"), "a", zipfile.ZIP_DEFLATE
     jt = os.path.join(root, "libs", "jni")
     if os.path.isdir(jt):
         for abi in sorted(os.listdir(jt)):
+            if not want(abi):
+                continue
             so = os.path.join(jt, abi, "libjlibtorrent-1.2.0.18.so")
             if os.path.isfile(so):
                 z.write(so, "lib/%s/libjlibtorrent-1.2.0.18.so" % abi)
