@@ -20,6 +20,11 @@ public final class GalGame {
     public static final int ONS = 2;
     public static final int KRKR = 3;
 
+    /** 这个引擎能不能直接跑（判断启动卡该画成可用还是灰的） */
+    public static boolean runs(int engine) {
+        return engine == TYRANO || engine == ONS || engine == KRKR;
+    }
+
     public static final class Info {
         public int engine = NONE;
         /** Tyrano 的入口文件（相对游戏目录） */
@@ -29,7 +34,7 @@ public final class GalGame {
         public int hits;
 
         public boolean supported() {
-            return engine == TYRANO || engine == ONS || engine == KRKR;
+            return runs(engine);
         }
 
         public String why() {

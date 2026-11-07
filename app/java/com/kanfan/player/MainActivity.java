@@ -121,7 +121,7 @@ public class MainActivity extends Activity {
         String sub;     // 文件夹副标题
         String tree;
         String rel;
-        int index;      // 根层级时的文件夹下标
+        int index = -1;  // 根层级时的文件夹下标；-1 表示不是根目录里的文件夹
         int engine;     // T_GAME 用：识别出的引擎
         boolean checked;
         Entry item;
@@ -226,6 +226,11 @@ public class MainActivity extends Activity {
 
     /** 进入管理：每行左侧出现圆圈，可多选删除、长按拖动排序 */
     private void enterManage() {
+        enterManage(null);
+    }
+
+    /** 进入管理，并顺手选中长按的那一行（长按文件夹时用） */
+    private void enterManage(Row pick) {
         if (folders.isEmpty()) {
             Toast.makeText(this, "还没有添加文件夹", Toast.LENGTH_SHORT).show();
             return;
@@ -233,6 +238,9 @@ public class MainActivity extends Activity {
         manageMode = true;
         selected.clear();
         dragPos = -1;
+        if (pick != null && pick.key != null && !pick.key.isEmpty()) {
+            selected.add(pick.key);
+        }
         rebuildRows();
         Toast.makeText(this, stack.isEmpty()
                 ? "点圆圈选择文件夹，长按可拖动排序"
@@ -552,12 +560,25 @@ public class MainActivity extends Activity {
                 if (position < 0 || position >= rows.size()) return false;
                 Row row = rows.get(position);
                 if (manageMode) {
-                    if (row.type != T_DIR) return false;
-                    dragPos = position;
-                    view.setAlpha(0.45f);
+                    // 管理页里：根文件夹长按拖动排序；文件/子文件夹长按仍给重命名等菜单
+                    if (row.type == T_DIR && row.index >= 0) {
+                        dragPos = position;
+                        view.setAlpha(0.45f);
+                        return true;
+                    }
+                    if (row.item != null) {
+                        rowMenu(row);
+                        return true;
+                    }
+                    return false;
+                }
+                if (row.type == T_HEADER) return false;
+                // 长按文件夹直接进管理页（并选中它）
+                if (row.type == T_DIR) {
+                    enterManage(row);
                     return true;
                 }
-                if (row.type == T_HEADER || row.item == null) return false;
+                if (row.item == null) return false;
                 rowMenu(row);
                 return true;
             }
@@ -1596,7 +1617,7 @@ public class MainActivity extends Activity {
 
     /** 目录顶部的「启动游戏」卡片 */
     private View gameView(Row r) {
-        boolean ok = r.engine == GalGame.TYRANO;
+        boolean ok = GalGame.runs(r.engine);
         int pad = Ui.dp(this, 5);
         FrameLayout wrap = new FrameLayout(this);
         wrap.setPadding(0, 0, 0, pad);
