@@ -260,14 +260,15 @@ public class MainActivity extends Activity {
         rebuildRows();
     }
 
-    /** 当前层能勾选的 key：根目录是各个文件夹，目录内是各个文件 */
+    /** 当前层能勾选的 key：根目录是各个文件夹，目录内是各个文件与子文件夹 */
     private List<String> selectableKeys() {
         List<String> out = new ArrayList<>();
         if (stack.isEmpty()) {
             for (String[] f : folders) out.add(f[0]);
         } else {
             for (Row r : rows) {
-                if (r.item != null) out.add(r.key);
+                if (r.key == null || r.key.isEmpty()) continue;
+                if (r.item != null || r.type == T_DIR) out.add(r.key);
             }
         }
         return out;
@@ -288,7 +289,7 @@ public class MainActivity extends Activity {
         if (selected.isEmpty()) {
             Toast.makeText(this, stack.isEmpty()
                     ? "先点圆圈选中要移除的文件夹"
-                    : "先点圆圈选中要隐藏的文件", Toast.LENGTH_SHORT).show();
+                    : "先点圆圈选中要隐藏的文件或文件夹", Toast.LENGTH_SHORT).show();
             return;
         }
         if (!stack.isEmpty()) {
@@ -296,8 +297,16 @@ public class MainActivity extends Activity {
             return;
         }
         final int n = selected.size();
+        // 先把这些库里「已导入的游戏副本」找出来，确认后一起删掉
+        final List<File> imports = new ArrayList<>();
+        for (String[] f : folders) {
+            if (selected.contains(f[0])) imports.addAll(GameImport.importsOf(this, f[0]));
+        }
+        String extra = imports.isEmpty() ? ""
+                : "\n\n另外会删掉 " + imports.size() + " 份已导入的游戏副本（KRKR 用的那份拷贝）。";
         new AlertDialog.Builder(this)
-                .setMessage("从应用里移除选中的 " + n + " 个文件夹？\n\n只是不再显示，手机上的文件不会被删除。")
+                .setMessage("从应用里移除选中的 " + n + " 个文件夹？\n\n"
+                        + "只是不再显示，手机上的原始文件不会被删除。" + extra)
                 .setNegativeButton("取消", null)
                 .setPositiveButton("移除", new android.content.DialogInterface.OnClickListener() {
                     @Override
@@ -307,8 +316,16 @@ public class MainActivity extends Activity {
                             if (!selected.contains(uri)) continue;
                             try {
                                 getContentResolver().releasePersistableUriPermission(
-                                        Uri.parse(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                            } catch (Exception ignored) {
+                                        Uri.parse(uri),
+                                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                            } catch (Exception e1) {
+                                // 当初只授了读权限时，带写标志的释放会整个失败，退回只释放读
+                                try {
+                                    getContentResolver().releasePersistableUriPermission(
+                                            Uri.parse(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                                } catch (Exception ignored) {
+                                }
                             }
                             folders.remove(i);
                         }
@@ -317,6 +334,25 @@ public class MainActivity extends Activity {
                         saveFolders();
                         stack.clear();
                         rescan();
+                        if (!imports.isEmpty()) {
+                            final int cnt = imports.size();
+                            new Thread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    for (File f : imports) {
+                                        GameImport.delete(f);
+                                        GameImport.forget(MainActivity.this, f);
+                                    }
+                                    ui.post(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            Toast.makeText(MainActivity.this,
+                                                    "已清理 " + cnt + " 份导入副本", Toast.LENGTH_SHORT).show();
+                                        }
+                                    });
+                                }
+                            }, "del-imports").start();
+                        }
                     }
                 })
                 .show();
@@ -326,7 +362,7 @@ public class MainActivity extends Activity {
     private void hideSelected() {
         final int n = selected.size();
         new AlertDialog.Builder(this)
-                .setMessage("在片库里隐藏选中的 " + n + " 个文件？\n\n只是不再显示，手机上的文件不会被删除。"
+                .setMessage("在片库里隐藏选中的 " + n + " 项？\n\n只是不再显示，手机上的文件不会被删除。"
                         + "\n回到首屏可以点「已隐藏」恢复。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("隐藏", new android.content.DialogInterface.OnClickListener() {
@@ -337,7 +373,7 @@ public class MainActivity extends Activity {
                         selected.clear();
                         manageMode = false;
                         rescan();
-                        Toast.makeText(MainActivity.this, "已隐藏 " + n + " 个文件",
+                        Toast.makeText(MainActivity.this, "已隐藏 " + n + " 项",
                                 Toast.LENGTH_SHORT).show();
                     }
                 })
@@ -355,7 +391,7 @@ public class MainActivity extends Activity {
 
     private void restoreHidden() {
         new AlertDialog.Builder(this)
-                .setMessage("恢复显示已隐藏的 " + hidden.size() + " 个文件？")
+                .setMessage("恢复显示已隐藏的 " + hidden.size() + " 项？")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("恢复", new android.content.DialogInterface.OnClickListener() {
                     @Override
@@ -1087,7 +1123,7 @@ public class MainActivity extends Activity {
         if (!hidden.isEmpty()) {
             Row r = new Row();
             r.type = T_RESTORE;
-            r.label = "已隐藏 " + hidden.size() + " 个文件 \u00b7 点此恢复";
+            r.label = "已隐藏 " + hidden.size() + " 项 \u00b7 点此恢复";
             rows.add(r);
         }
     }
@@ -1163,18 +1199,26 @@ public class MainActivity extends Activity {
         });
 
         if (!dirs.isEmpty()) {
-            Row h = new Row();
-            h.type = T_HEADER;
-            h.label = "文件夹";
-            rows.add(h);
+            List<Row> dirRows = new ArrayList<>();
             for (Nav.Dir d : dirs) {
+                // 子文件夹也要能被隐藏：它没有 Entry，用 tree+相对路径当 key
+                String dk = Nav.dirKey(cur.tree, d.rel);
+                if (hidden.contains(dk)) continue;
                 Row r = new Row();
                 r.type = T_DIR;
+                r.key = dk;
                 r.label = d.name;
                 r.tree = cur.tree;
                 r.rel = d.rel;
                 r.sub = subText(d.videoCount, d.bookCount, d.imageCount, d.archiveCount, d.otherCount, d.size);
-                rows.add(r);
+                dirRows.add(r);
+            }
+            if (!dirRows.isEmpty()) {
+                Row h = new Row();
+                h.type = T_HEADER;
+                h.label = "文件夹";
+                rows.add(h);
+                rows.addAll(dirRows);
             }
         }
 
@@ -1589,6 +1633,8 @@ public class MainActivity extends Activity {
                                     return cancel[0];
                                 }
                             });
+                    // 记一笔：这个副本属于哪个库文件夹，移除时好一起清掉
+                    GameImport.remember(MainActivity.this, tree, r.rel, dir);
                 } catch (Throwable t) {
                     err = t.getMessage() == null ? "导入失败" : t.getMessage();
                     GameImport.delete(dir);
@@ -2137,15 +2183,18 @@ public class MainActivity extends Activity {
         card.addView(box, blp);
     }
 
-    /** 统一算好每行的 key 与勾选状态，视图只负责画 */
-    private void decorateSelection() {
+    /** 统一算好每行的 key 与勾选状态，视图只负责画 */    private void decorateSelection() {
         for (Row r : rows) {
             if (r.item != null) {
                 r.key = docKey(r.item);
                 r.checked = manageMode && selected.contains(r.key);
-            } else if (r.type == T_DIR) {
+            } else if (r.type == T_DIR && r.index >= 0) {
+                // 根目录里的文件夹：key 就是库的 tree
                 r.key = r.tree;
                 r.checked = manageMode && selected.contains(r.tree);
+            } else if (r.type == T_DIR) {
+                // 子文件夹的 key 由 buildDirRows 算好（tree|rel），别覆盖
+                r.checked = manageMode && r.key != null && selected.contains(r.key);
             }
         }
     }

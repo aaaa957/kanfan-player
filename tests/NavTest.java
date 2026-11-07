@@ -95,6 +95,17 @@ public class NavTest {
 
         // 6) 空输入不炸
         check("空输入/子目录", Nav.subdirsOf("", new String[0], new long[0]).size(), 0);
+        // 子文件夹的隐藏 key：必须是「tree|rel」，不能等于 tree 本身
+        String tree = "content://com.android.externalstorage.documents/tree/primary%3AGEM";
+        check("dirKey 不等于 tree", Nav.dirKey(tree, "a").equals(tree), false);
+        check("dirKey 拼法", Nav.dirKey(tree, "a/b"), tree + "|a/b");
+        check("不同子目录 key 不同",
+                Nav.dirKey(tree, "a").equals(Nav.dirKey(tree, "b")), false);
+        check("同参数稳定", Nav.dirKey(tree, "a/b"), Nav.dirKey(tree, "a/b"));
+        check("null rel 不炸", Nav.dirKey(tree, null), tree + "|");
+        check("null tree 不炸", Nav.dirKey(null, "a"), "|a");
+        check("rel 为空串也不等于 tree", Nav.dirKey(tree, "").equals(tree), false);
+
         check("空输入/直属", Nav.directOf("", null).length, 0);
         check("null/rest", Nav.rest(null, null), "");
 

@@ -120,4 +120,61 @@ public final class GameImport {
         }
         dir.delete();
     }
+
+    // ---------------- 导入记录（移除库文件夹时好把副本一起清掉） ----------------
+
+    private static final String PREF = "kanfan_folders";
+
+    private static android.content.SharedPreferences sp(Context c) {
+        return c.getSharedPreferences(PREF, Context.MODE_PRIVATE);
+    }
+
+    private static File baseDir(Context c) {
+        File base = c.getExternalFilesDir("games");
+        return base != null ? base : new File(c.getFilesDir(), "games");
+    }
+
+    /** 记下「这个导入目录属于哪个库文件夹」 */
+    public static void remember(Context c, Uri tree, String rel, File dir) {
+        if (dir == null) return;
+        try {
+            sp(c).edit().putString("imp:" + dir.getName(),
+                    tree.toString() + "|" + (rel == null ? "" : rel)).apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    public static void forget(Context c, File dir) {
+        if (dir == null) return;
+        try {
+            sp(c).edit().remove("imp:" + dir.getName()).apply();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 这个库文件夹下导入过哪些游戏（找不到记录的旧副本会漏掉，删不掉就是了，不会误删） */
+    public static java.util.List<File> importsOf(Context c, String treeUri) {
+        java.util.List<File> out = new java.util.ArrayList<File>();
+        File base = baseDir(c);
+        if (base == null || treeUri == null) return out;
+        String prefix = treeUri + "|";
+        java.util.Set<String> names = new java.util.HashSet<String>();
+        try {
+            for (java.util.Map.Entry<String, ?> e : sp(c).getAll().entrySet()) {
+                String k = e.getKey();
+                if (k == null || !k.startsWith("imp:")) continue;
+                Object v = e.getValue();
+                if (v instanceof String && ((String) v).startsWith(prefix)) {
+                    names.add(k.substring(4));
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        for (String n : names) {
+            File d = new File(base, n);
+            if (d.isDirectory()) out.add(d);
+            else forget(c, d);
+        }
+        return out;
+    }
 }

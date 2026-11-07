@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.kanfan.player"
-    android:versionCode="25"
-    android:versionName="3.4">
+    android:versionCode="26"
+    android:versionName="3.5">
 
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 下载：BT 引擎需要联网；后台下载靠前台服务 -->

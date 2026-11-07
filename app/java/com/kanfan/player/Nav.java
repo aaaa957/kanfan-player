@@ -11,6 +11,17 @@ import java.util.Map;
  */
 public final class Nav {
 
+    /**
+     * 子文件夹的「隐藏 key」。
+     *
+     * 文件用 document id 当 key，但子文件夹在列表里没有 Entry（也就没有 docId），
+     * 所以用 tree + 相对路径。**绝不能直接用 tree**——那样会把整个库根当成一个 key，
+     * 隐藏谁都不生效（v3.4 之前的真实 bug）。
+     */
+    public static String dirKey(String tree, String rel) {
+        return (tree == null ? "" : tree) + "|" + (rel == null ? "" : rel);
+    }
+
     public static final class Dir {
         public final String name;
         public final String rel;
